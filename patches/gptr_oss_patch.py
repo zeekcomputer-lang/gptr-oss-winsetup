@@ -1,0 +1,183 @@
+"""
+gptr_oss_patch — GPT-Researcher × GPT-OSS 런타임 패치 (monkeypatch, repo 무수정)
+
+목적:
+  1) LLM(챗) 호출에만 커스텀 default_headers 주입 (deep-doc-pipeline 패턴 차용)
+       - OpenAI 호환 엔드포인트 + 게이트웨이/프록시 인증 헤더 지원
+       - 임베딩(BGE)에는 절대 주입하지 않음 (요구사항: 임베딩은 헤더 없음)
+  2) tool-calling 경로 차단 보조: supports_tools() 를 False 로 강제(옵션)
+  3) GPT-OSS는 strict function-calling/JSON mode 미지원 가정 → 메인 파이프라인만 사용
+
+사용:
+  import gptr_oss_patch          # import 시점에 자동 적용
+  gptr_oss_patch.apply()         # 또는 명시 호출(멱등)
+
+환경변수:
+  OPENAI_BASE_URL          LLM 엔드포인트 (예: http://localhost:11434/v1)
+  OPENAI_API_KEY           SDK 필수값 충족용 (헤더 인증이면 'unused' 등 임의값)
+  OPENAI_EXTRA_HEADERS     LLM 전용 추가 헤더 (JSON 문자열). 예:
+                           {"Authorization":"Bearer xxx","X-Project-Id":"abc"}
+  EMBEDDING_BASE_URL       임베딩(BGE) 전용 엔드포인트 (예: http://127.0.0.1:7997/v1)
+                           - LLM 과 분리. 헤더 주입 없음(요구사항).
+  EMBEDDING_API_KEY        임베딩 SDK 필수값 충족용 (기본 'unused')
+  GPTR_DISABLE_TOOLCALLING 1/true 면 supports_tools() → False 강제 (기본 1)
+
+주의:
+  - 이 모듈은 gpt_researcher 를 import 하기 전이나 후 아무 때나 apply() 가능.
+  - 멱등: 여러 번 호출해도 1회만 적용.
+"""
+from __future__ import annotations
+
+import json
+import os
+import sys
+
+_APPLIED = False
+
+
+def _parse_extra_headers() -> dict:
+    raw = os.getenv("OPENAI_EXTRA_HEADERS")
+    if not raw:
+        return {}
+    try:
+        data = json.loads(raw)
+        if isinstance(data, dict):
+            return {str(k): str(v) for k, v in data.items()}
+        print(f"[gptr_oss_patch][WARN] OPENAI_EXTRA_HEADERS 는 JSON object 여야 함: {raw!r}")
+    except json.JSONDecodeError as e:
+        print(f"[gptr_oss_patch][WARN] OPENAI_EXTRA_HEADERS JSON 파싱 실패: {e}")
+    return {}
+
+
+def _truthy(v: str | None, default: bool = False) -> bool:
+    if v is None:
+        return default
+    return v.strip().lower() in ("1", "true", "yes", "on")
+
+
+def _patch_llm_default_headers() -> None:
+    """GenericLLMProvider.from_provider 를 래핑하여
+    OpenAI 호환 LLM provider 에 default_headers 를 주입한다.
+    (provider 가 ChatOpenAI 계열일 때만; 임베딩은 별도 경로라 영향 없음)
+    """
+    from gpt_researcher.llm_provider.generic import base as _base
+
+    if getattr(_base.GenericLLMProvider.from_provider, "_oss_patched", False):
+        return
+
+    extra_headers = _parse_extra_headers()
+    # default_headers 를 받는 OpenAI 호환 provider 화이트리스트
+    _OPENAI_COMPATIBLE = {
+        "openai", "azure_openai", "dashscope", "deepseek", "openrouter",
+        "vllm_openai", "aimlapi", "forge", "avian", "minimax", "together",
+    }
+
+    _orig = _base.GenericLLMProvider.from_provider.__func__  # classmethod underlying fn
+
+    def _wrapped(cls, provider: str, chat_log=None, verbose: bool = True, **kwargs):
+        if extra_headers and provider in _OPENAI_COMPATIBLE:
+            # langchain_openai.ChatOpenAI 는 default_headers 를 지원.
+            # 이미 사용자가 넣었으면 병합(사용자 우선).
+            merged = dict(extra_headers)
+            if "default_headers" in kwargs and isinstance(kwargs["default_headers"], dict):
+                merged.update(kwargs["default_headers"])
+            kwargs["default_headers"] = merged
+        return _orig(cls, provider, chat_log=chat_log, verbose=verbose, **kwargs)
+
+    _wrapped._oss_patched = True
+    _base.GenericLLMProvider.from_provider = classmethod(_wrapped)
+    if extra_headers:
+        keys = ", ".join(sorted(extra_headers.keys()))
+        print(f"[gptr_oss_patch] LLM default_headers 주입 활성화: [{keys}]")
+    else:
+        print("[gptr_oss_patch] OPENAI_EXTRA_HEADERS 미설정 — LLM 헤더 주입 없음")
+
+
+def _patch_embedding_base_url() -> None:
+    """임베딩(BGE)을 LLM 과 분리된 base_url 로 강제한다.
+
+    gpt_researcher.memory.Memory 의 openai/custom 분기는 OPENAI_BASE_URL 을
+    공유하므로, EMBEDDING_BASE_URL 이 있으면 그 값을 embedding_kwargs 에
+    openai_api_base 로 주입하여 LLM 엔드포인트와 충돌하지 않게 한다.
+    헤더는 절대 주입하지 않는다(요구사항: 임베딩은 커스텀 헤더 없음).
+    """
+    emb_base = os.getenv("EMBEDDING_BASE_URL")
+    if not emb_base:
+        print("[gptr_oss_patch] EMBEDDING_BASE_URL 미설정 — 임베딩 base_url 분리 없음")
+        return
+
+    from gpt_researcher.memory import embeddings as _emb
+
+    if getattr(_emb.Memory.__init__, "_oss_patched", False):
+        return
+
+    emb_key = os.getenv("EMBEDDING_API_KEY", "unused")
+    _orig_init = _emb.Memory.__init__
+
+    def _wrapped_init(self, embedding_provider, model, **embedding_kwargs):
+        if embedding_provider in ("openai", "custom"):
+            embedding_kwargs.setdefault("openai_api_base", emb_base)
+            embedding_kwargs.setdefault("openai_api_key", emb_key)
+            # BGE 는 컨텍스트 길이 체크 불필요 + 로컬
+            embedding_kwargs.setdefault("check_embedding_ctx_length", False)
+        return _orig_init(self, embedding_provider, model, **embedding_kwargs)
+
+    _wrapped_init._oss_patched = True
+    _emb.Memory.__init__ = _wrapped_init
+    print(f"[gptr_oss_patch] 임베딩 base_url 분리: {emb_base} (헤더 없음)")
+
+
+def _patch_disable_toolcalling() -> None:
+    """supports_tools() 를 False 로 강제하여 챗 경로의 bind_tools 시도를 차단.
+    (메인 리서치 파이프라인은 애초에 tool-calling 미사용)
+    """
+    if not _truthy(os.getenv("GPTR_DISABLE_TOOLCALLING"), default=True):
+        return
+    try:
+        from gpt_researcher.utils import tools as _tools
+    except Exception as e:  # pragma: no cover
+        print(f"[gptr_oss_patch][WARN] tools 모듈 패치 건너뜀: {e}")
+        return
+
+    if getattr(_tools.supports_tools, "_oss_patched", False):
+        return
+
+    def _no_tools(provider: str) -> bool:
+        return False
+
+    _no_tools._oss_patched = True
+    _tools.supports_tools = _no_tools
+
+    def _empty_providers():
+        return []
+
+    _empty_providers._oss_patched = True
+    _tools.get_available_providers_with_tools = _empty_providers
+    print("[gptr_oss_patch] tool-calling 비활성화 (supports_tools→False)")
+
+
+def apply() -> None:
+    global _APPLIED
+    if _APPLIED:
+        return
+    # gpt_researcher 가 아직 import 안 됐다면 import 시도
+    try:
+        import gpt_researcher  # noqa: F401
+    except Exception as e:
+        print(f"[gptr_oss_patch][ERROR] gpt_researcher import 실패: {e}", file=sys.stderr)
+        raise
+
+    _patch_llm_default_headers()
+    _patch_embedding_base_url()
+    _patch_disable_toolcalling()
+    _APPLIED = True
+    print("[gptr_oss_patch] 적용 완료.")
+
+
+# import 시 자동 적용(편의). 비활성화하려면 GPTR_OSS_PATCH_AUTOAPPLY=0
+if _truthy(os.getenv("GPTR_OSS_PATCH_AUTOAPPLY"), default=True):
+    try:
+        apply()
+    except Exception:
+        # import-time 실패는 조용히 넘기고, 명시 apply() 시 재시도하게 둔다.
+        _APPLIED = False

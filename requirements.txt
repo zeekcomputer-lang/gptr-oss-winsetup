@@ -1,0 +1,10 @@
+# 런처 자체 의존성은 표준 라이브러리만 사용 (간단 .env 로더 내장).
+# 아래는 참고용 — 실제 설치는 tools/setup.py 가 수행한다.
+#
+# [gpt-researcher] vendor/gpt-researcher/requirements.txt 로 설치
+# [retriever]      duckduckgo-search
+# [BGE 서버]       fastapi, uvicorn, sentence-transformers, torch
+#
+# 직접 설치하려면:
+#   pip install -r vendor/gpt-researcher/requirements.txt
+#   pip install duckduckgo-search fastapi uvicorn sentence-transformers torch

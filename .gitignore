@@ -1,0 +1,18 @@
+# venv / vendored repo
+.venv/
+vendor/
+
+# env / secrets
+.env
+
+# outputs / logs
+outputs/
+*.log
+
+# python
+__pycache__/
+*.pyc
+
+# models cache
+.cache/
+models/
