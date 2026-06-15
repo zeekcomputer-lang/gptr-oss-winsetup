@@ -17,7 +17,7 @@ gptr_oss_patch — GPT-Researcher × GPT-OSS 런타임 패치 (monkeypatch, repo
   OPENAI_API_KEY           SDK 필수값 충족용 (헤더 인증이면 'unused' 등 임의값)
   OPENAI_EXTRA_HEADERS     LLM 전용 추가 헤더 (JSON 문자열). 예:
                            {"Authorization":"Bearer xxx","X-Project-Id":"abc"}
-  EMBEDDING_BASE_URL       임베딩(BGE) 전용 엔드포인트 (예: http://127.0.0.1:7997/v1)
+  EMBEDDING_BASE_URL       임베딩(BGE) 전용 엔드포인트 (예: http://127.0.0.1:8999/v1)
                            - LLM 과 분리. 헤더 주입 없음(요구사항).
   EMBEDDING_API_KEY        임베딩 SDK 필수값 충족용 (기본 'unused')
   GPTR_DISABLE_TOOLCALLING 1/true 면 supports_tools() → False 강제 (기본 1)

@@ -4,14 +4,16 @@ setup — 1회성 셋업 (무거움)
 수행:
   1) .venv 생성
   2) gpt-researcher repo vendoring (vendor/gpt-researcher)
-  3) 의존성 설치 (gpt-researcher + BGE 서버 + 런처)
+  3) 의존성 설치 (gpt-researcher 라이브러리 + 검색 retriever)
   4) .env 부트스트랩 (.env.example → .env, 없을 때만)
-  5) 검증 (import gpt_researcher / sentence_transformers)
+  5) 검증 (import gpt_researcher)
+
+※ 임베딩(BGE) 서버는 이 repo 가 설치/구동하지 않는다. torch/sentence-transformers
+   같은 무거운 의존성은 설치하지 않으며, 사용자가 별도로 띄운 임베딩
+   엔드포인트(EMBEDDING_BASE_URL)에 접속만 한다.
 
 사용:
   python tools/setup.py
-  python tools/setup.py --skip-bge     # BGE(torch) 설치 생략(외부 임베딩 사용 시)
-  python tools/setup.py --cpu          # torch CPU 휠 강제
 """
 from __future__ import annotations
 
@@ -51,27 +53,19 @@ def vendor_repo() -> None:
     run(args)
 
 
-def pip_install(skip_bge: bool, cpu: bool) -> None:
+def pip_install() -> None:
     section("3/5 의존성 설치")
     vpy = str(venv_python())
     run([vpy, "-m", "pip", "install", "--upgrade", "pip", "setuptools", "wheel"])
 
-    # gpt-researcher 런타임 의존성
+    # gpt-researcher 런타임 의존성 (라이브러리 사용용)
     req = VENDOR_DIR / "requirements.txt"
     if req.exists():
         run([vpy, "-m", "pip", "install", "-r", str(req)])
 
-    # 런처/공통 (간단 .env 로더는 자체 구현이라 dotenv 불요)
+    # 검색 retriever (web/hybrid 모드용, 무키). local 전용이면 사실상 불필이나 고정메뉴상 설치.
     run([vpy, "-m", "pip", "install", "duckduckgo-search"])
-
-    if not skip_bge:
-        if cpu:
-            run([vpy, "-m", "pip", "install", "torch",
-                 "--index-url", "https://download.pytorch.org/whl/cpu"])
-        run([vpy, "-m", "pip", "install",
-             "fastapi", "uvicorn", "sentence-transformers"])
-    else:
-        print("  --skip-bge: torch/sentence-transformers 설치 생략")
+    # ※ 임베딩 서버는 별도 운영 — torch/sentence-transformers 미설치.
 
 
 def bootstrap_env() -> None:
@@ -85,7 +79,7 @@ def bootstrap_env() -> None:
     print(f"  생성: {env}  (값을 채우세요: OPENAI_BASE_URL, 모델명 등)")
 
 
-def verify(skip_bge: bool) -> None:
+def verify() -> None:
     section("5/5 검증")
     vpy = str(venv_python())
     # gpt_researcher import (vendor 경로 주입)
@@ -97,11 +91,6 @@ def verify(skip_bge: bool) -> None:
     rc = run([vpy, "-c", code], check=False)
     if rc != 0:
         raise SystemExit("검증 실패: gpt_researcher import 불가")
-    if not skip_bge:
-        rc2 = run([vpy, "-c", "import sentence_transformers, fastapi, uvicorn; print('BGE deps OK')"],
-                  check=False)
-        if rc2 != 0:
-            raise SystemExit("검증 실패: BGE 의존성 import 불가")
     OUTPUTS_DIR.mkdir(exist_ok=True)
     DATA_RAW_DIR.mkdir(parents=True, exist_ok=True)
     DOCS_DIR.mkdir(parents=True, exist_ok=True)
@@ -110,23 +99,21 @@ def verify(skip_bge: bool) -> None:
 
 def main() -> int:
     ap = argparse.ArgumentParser(description="gptr-oss-winsetup 셋업")
-    ap.add_argument("--skip-bge", action="store_true")
-    ap.add_argument("--cpu", action="store_true")
-    args = ap.parse_args()
+    ap.parse_args()
 
     print(f"[setup] ROOT={ROOT}")
     print(f"[setup] platform={'Windows' if is_windows() else 'POSIX'}")
 
     make_venv()
     vendor_repo()
-    pip_install(args.skip_bge, args.cpu)
+    pip_install()
     bootstrap_env()
-    verify(args.skip_bge)
+    verify()
 
     section("셋업 완료")
     print("다음 단계:")
-    print("  1) .env 편집 — OPENAI_BASE_URL / 모델명 / (선택)OPENAI_EXTRA_HEADERS")
-    print("  2) 임베딩 서버:  python tools/launch.py bge")
+    print("  1) .env 편집 — OPENAI_BASE_URL / 모델명 / EMBEDDING_BASE_URL / (선택)OPENAI_EXTRA_HEADERS")
+    print("  2) 별도 운영 중인 BGE 엔드포인트 확인:  python tools/launch.py check-embedding")
     print("  3-a) 웹 리서치 :  python tools/launch.py research \"질의\"")
     print("  3-b) 로컬 데이터:  python tools/launch.py prepare data/raw/<파일>.jsonl")
     print("                → python tools/launch.py research \"질의\" --source local")

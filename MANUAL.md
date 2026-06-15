@@ -187,24 +187,26 @@ STRATEGIC_LLM=openai:gpt-oss-120b
 - `provider` 는 `openai` 로 고정(= OpenAI 호환). `model` 만 서빙 중인 gpt-oss 이름으로.
 - 인증 헤더는 `OPENAI_EXTRA_HEADERS`(JSON)로. **임베딩에는 절대 적용되지 않는다.**
 
-### 3.2 임베딩(BGE) — 로컬 서버 (local 모드 필수)
+### 3.2 임베딩(BGE) — 별도 운영 중인 엔드포인트 연결 (local 모드 필수)
 
-#### 옵션 A (권장) — 이미 운영 중인 "내 BGE 서버" 연결
+> 임베딩 서버는 **사용자가 별도 프로세스로 직접 기동**한다. 이 repo 는 서버를
+> 설치하거나 구동하지 않으며, **활성화된 엔드포인트에 HTTP 로 접속만** 한다.
+> (그래서 `start-bge.bat` 같은 서버 기동 단계가 없다.)
 
-이미 로컬에서 BGE 임베딩 서버(예: `bge-m3-korean`, 포트 8999)를 돌리고 있다면
-**설치 불필요** — `.env` 에서 그 서버를 가리키기만 하면 된다. 기본값이 이미 그 구조에 맞춰져 있다:
+`.env` 에서 그 엔드포인트를 가리키기만 하면 된다. 기본값이 이미 사용자 서버
+(`bge-m3-korean`, 포트 8999) 구조에 맞춰져 있다:
 
 ```dotenv
 EMBEDDING=openai:bge-m3-korean              # provider=openai 고정, model=서버 응답 이름
 EMBEDDING_BASE_URL=http://127.0.0.1:8999/v1 # 서버의 /v1 경로 (다른 PC면 127.0.0.1 -> IP)
-EMBEDDING_API_KEY=unused
+EMBEDDING_API_KEY=***
 ```
 
 > 사용자 서버 계약(제공해주신 예): `host="0.0.0.0", port=8999`, `POST /v1/embeddings`,
 > `model.encode(..., normalize_embeddings=True)` -> float 리스트 반환. 이 계약은
 > gpt-researcher 와 그대로 호환된다(독립 검증 완료, 부록 B 참조).
 
-**호환성 검증** (서버를 띄운 상태에서 실행):
+**연결 점검** (사용자가 BGE 서버를 띄운 상태에서):
 
 ```bat
 windows\check-embedding.bat
@@ -214,29 +216,6 @@ python tools/launch.py check-embedding
 ```
 -> `[check_embedding][OK] 정상. 벡터 N개, dim=1024` 이 나오면 연동 준비 완료.
 (`doctor` 도 `BGE /v1/embeddings: OK(dim=...)` 로 같은 점검을 한다.)
-
-#### 옵션 B (대안) — repo 내장 BGE 서버 사용
-
-별도 서버가 없으면 `bge_server/` 로 구동. `.env` 를 아래로 바꿔 쓴다:
-
-```dotenv
-EMBEDDING=openai:BAAI/bge-m3
-EMBEDDING_BASE_URL=http://127.0.0.1:7997/v1
-BGE_MODEL=BAAI/bge-m3
-BGE_PORT=7997
-# BGE_DEVICE=cuda
-```
-
-```bat
-windows\start-bge.bat        REM 별도 창에서 계속 실행
-```
-```bash
-python tools/launch.py bge
-```
-
-- 첫 기동 시 모델 다운로드(수백 MB~1GB). `[bge_server] 로딩 완료. dim=...` 후 대기.
-- 내장 서버는 `/health` 제공 -> `curl http://127.0.0.1:7997/health`.
-- GPU 미보유 시 CPU로도 동작. 대용량이면 `BGE_DEVICE=cuda` 권장.
 
 > 주의(호환성 핵심, 검증됨): gpt-researcher 는 langchain 으로 임베딩을 호출한다.
 > 본 repo 패치가 `check_embedding_ctx_length=False` 를 자동 주입해 서버에 **원문 텍스트**를
@@ -351,9 +330,8 @@ python tools/setup.py
 # 1) 데이터 준비: jsonl -> data/docs/*.md
 python tools/launch.py prepare data/raw/corpus.jsonl --content-field text --clean
 
-# 2) 임베딩 서버: "내 BGE 서버"를 띄우고(포트 8999) .env 에 EMBEDDING_BASE_URL 지정
-#    (대안) 번들 서버:  python tools/launch.py bge
-python tools/launch.py check-embedding      # 임베딩 서버 호환성 검증
+# 2) 임베딩: 사용자가 BGE 서버를 별도로 띄운다(포트 8999) → .env 의 EMBEDDING_BASE_URL 지정
+python tools/launch.py check-embedding      # 엔드포인트 연결/호환성 검증
 
 # 2') .env 에 OPENAI_BASE_URL / 모델 / (선택)헤더 입력
 
@@ -365,8 +343,8 @@ python tools/launch.py doctor
 ```
 
 Windows는 위 `python tools/launch.py X` 를 각각
-`windows\setup.bat` / `prepare-data.bat` / `start-bge.bat` / `research-local.bat` / `doctor.bat`
-로 대체하면 된다.
+`windows\setup.bat` / `prepare-data.bat` / `check-embedding.bat` / `research-local.bat` / `doctor.bat`
+로 대체하면 된다. (임베딩 서버 기동은 이 repo 밖, 사용자가 별도 수행)
 
 ---
 

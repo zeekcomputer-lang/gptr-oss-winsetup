@@ -6,7 +6,7 @@ cd /d "%~dp0\.."
 python tools\launch.py prepare %*
 if errorlevel 1 goto FAIL
 echo.
-echo [OK] 변환 완료. 다음: start-bge.bat 기동 후  research.bat "질의" --source local
+echo [OK] 변환 완료. 다음: (별도 BGE 엔드포인트 활성화) check-embedding.bat 로 점검 후  research-local.bat "질의"
 goto END
 
 :FAIL

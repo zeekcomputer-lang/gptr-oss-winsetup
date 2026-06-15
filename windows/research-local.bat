@@ -10,7 +10,7 @@ goto END
 
 :USAGE
 echo 사용법: research-local.bat "질의" [옵션]
-echo   사전: prepare-data.bat 로 data\docs 생성 + start-bge.bat 로 BGE 기동
+echo   사전: prepare-data.bat 로 data\docs 생성 + 별도 운영 BGE 엔드포인트 활성화(check-embedding.bat 로 점검)
 exit /b 2
 
 :FAIL

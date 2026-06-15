@@ -11,7 +11,7 @@ python tools\setup.py %*
 if errorlevel 1 goto FAIL
 
 echo.
-echo [OK] 셋업 완료. 다음: windows\start-bge.bat  그리고  windows\research.bat "질의"
+echo [OK] 셋업 완료. 다음: .env 편집 → windows\check-embedding.bat → windows\research.bat "질의"
 goto END
 
 :NOPYTHON

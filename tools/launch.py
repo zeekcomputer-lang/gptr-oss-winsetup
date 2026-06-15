@@ -3,13 +3,16 @@ launch — 반복 실행 (가벼움)
 
 서브커맨드:
   prepare "<입력>" [opts]      로컬 데이터(jsonl/csv/json) → data/docs(.md) 변환
-  bge                          BGE 임베딩 서버 기동 (포그라운드)
+  check-embedding [opts]       별도 운영 중인 BGE 임베딩 엔드포인트 호환성 점검
   research "<질의>" [opts]     리서치 실행 → outputs/ 저장
   doctor                       환경 점검 (venv/vendor/.env/엔드포인트)
 
+  ※ 임베딩(BGE) 서버는 이 repo 가 구동하지 않는다. 사용자가 별도로 띄운
+    OpenAI 호환 엔드포인트(EMBEDDING_BASE_URL)에 접속만 한다.
+
 사용:
   python tools/launch.py prepare data/raw/corpus.jsonl --content-field text
-  python tools/launch.py bge
+  python tools/launch.py check-embedding
   python tools/launch.py research "우리 데이터 핵심 요약" --source local
   python tools/launch.py research "양자내성암호 2026 표준화 동향" --report-type research_report
   python tools/launch.py doctor
@@ -29,7 +32,6 @@ from _common import (  # noqa: E402
     ROOT, VENDOR_DIR, OUTPUTS_DIR, DOCS_DIR, venv_python, venv_exists, vendor_exists, run,
 )
 
-BGE_SERVER = ROOT / "bge_server" / "bge_server.py"
 RUN_RESEARCH = ROOT / "tools" / "run_research.py"
 PREPARE_DATA = ROOT / "tools" / "prepare_data.py"
 CHECK_EMBEDDING = ROOT / "tools" / "check_embedding.py"
@@ -72,13 +74,6 @@ def cmd_prepare(argv: list[str]) -> int:
         return 2
     py = str(venv_python()) if venv_exists() else sys.executable
     return run([py, str(PREPARE_DATA), *argv], check=False)
-
-
-def cmd_bge(argv: list[str]) -> int:
-    _ensure_setup()
-    _load_env_into_os()
-    print(f"[launch] BGE 서버 기동: {BGE_SERVER}")
-    return run([str(venv_python()), str(BGE_SERVER)], check=False)
 
 
 def cmd_research(argv: list[str]) -> int:
@@ -151,13 +146,13 @@ def cmd_doctor(argv: list[str]) -> int:
     return 0
 
 
-_CMDS = {"prepare": cmd_prepare, "bge": cmd_bge, "research": cmd_research,
+_CMDS = {"prepare": cmd_prepare, "research": cmd_research,
          "check-embedding": cmd_embed_check, "doctor": cmd_doctor}
 
 
 def main() -> int:
     if len(sys.argv) < 2 or sys.argv[1] not in _CMDS:
-        print("사용법: python tools/launch.py [prepare|bge|research|check-embedding|doctor] ...")
+        print("사용법: python tools/launch.py [prepare|check-embedding|research|doctor] ...")
         return 2
     return _CMDS[sys.argv[1]](sys.argv[2:])
 
