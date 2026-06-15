@@ -55,6 +55,38 @@ def _truthy(v: str | None, default: bool = False) -> bool:
     return v.strip().lower() in ("1", "true", "yes", "on")
 
 
+def _ensure_no_proxy_for_embedding() -> None:
+    """임베딩 엔드포인트는 동일 로컬 머신 직접 호출이므로 프록시를 타지 않게 한다.
+
+    EMBEDDING_BASE_URL 의 host 를 NO_PROXY / no_proxy 에 병합한다(기존 값 보존).
+    - LLM(게이트웨이)은 다른 host 이므로 영향 없음 — LLM은 계속 프록시/헤더 사용 가능.
+    - HTTP_PROXY/HTTPS_PROXY 가 걸려 있어도 127.0.0.1 호출이 프록시로 새지 않도록 보장.
+    """
+    from urllib.parse import urlparse
+
+    base = os.getenv("EMBEDDING_BASE_URL")
+    if not base:
+        return
+    host = urlparse(base).hostname
+    if not host:
+        return
+    additions = {host}
+    if host in ("127.0.0.1", "::1"):
+        additions.add("localhost")
+    elif host == "localhost":
+        additions.update({"127.0.0.1", "::1"})
+
+    changed = set()
+    for var in ("NO_PROXY", "no_proxy"):
+        items = [x.strip() for x in os.getenv(var, "").split(",") if x.strip()]
+        for a in additions:
+            if a not in items:
+                items.append(a)
+                changed.add(a)
+        os.environ[var] = ",".join(items)
+    print(f"[gptr_oss_patch] 임베딩 프록시 우회(직결): NO_PROXY ⊇ {sorted(additions)} (host={host})")
+
+
 def _patch_llm_default_headers() -> None:
     """GenericLLMProvider.from_provider 를 래핑하여
     OpenAI 호환 LLM provider 에 default_headers 를 주입한다.
@@ -167,6 +199,7 @@ def apply() -> None:
         print(f"[gptr_oss_patch][ERROR] gpt_researcher import 실패: {e}", file=sys.stderr)
         raise
 
+    _ensure_no_proxy_for_embedding()
     _patch_llm_default_headers()
     _patch_embedding_base_url()
     _patch_disable_toolcalling()

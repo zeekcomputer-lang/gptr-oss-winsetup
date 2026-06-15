@@ -65,8 +65,11 @@ def main() -> int:
     )
     print(f"[check_embedding] POST {url}")
     print(f"[check_embedding] model={args.model!r} inputs=2 (원문 텍스트 전송 = gpt-researcher 패치 경로)")
+    print("[check_embedding] 프록시 미경유 직결(로컬 머신 직접 호출)")
+    # 임베딩은 동일 머신 직접 호출 — HTTP(S)_PROXY 가 걸려 있어도 절대 프록시를 타지 않는다.
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
     try:
-        with urllib.request.urlopen(req, timeout=15) as r:
+        with opener.open(req, timeout=15) as r:
             data = json.loads(r.read().decode("utf-8"))
     except Exception as e:
         print(f"[check_embedding][FAIL] 요청 실패: {type(e).__name__}: {e}")

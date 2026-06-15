@@ -10,7 +10,7 @@ GPT-Researcher를 **GPT-OSS(로컬/사내 OpenAI 호환 LLM)** 로 구동하기 
 | 항목 | 방식 |
 |------|------|
 | **LLM 호출** | OpenAI 호환 `base_url` + `default_headers`(deep-doc-pipeline 패턴). 게이트웨이/프록시 인증 헤더를 **LLM 호출에만** 주입 |
-| **임베딩** | 사용자가 **별도 운영**하는 BGE 엔드포인트(OpenAI 호환 `/v1/embeddings`)에 **접속만** 함. 이 repo 는 임베딩 서버를 구동하지 않음. `EMBEDDING_BASE_URL`로 LLM과 별도 분리, 헤더 미주입 |
+| **임베딩** | 사용자가 **별도 운영**하는 BGE 엔드포인트(OpenAI 호환 `/v1/embeddings`)에 **접속만** 함. 이 repo 는 임베딩 서버를 구동하지 않음. `EMBEDDING_BASE_URL`로 LLM과 별도 분리, **헤더 미주입 + 동일 로컬 머신 직결(프록시 미경유)** |
 | **tool-calling 우회** | `MCP_STRATEGY=disabled` + `supports_tools()→False` 강제. 메인 파이프라인은 애초에 function-calling 미사용 |
 | **원본 무수정** | `patches/gptr_oss_patch.py` 런타임 패치(멱등). repo는 `vendor/`에 clone |
 | **Windows** | setup(무거움)/launch(가벼움) 분리, `.bat`은 thin wrapper만 |
@@ -126,6 +126,9 @@ OpenAI 호환 provider 생성 시 `OPENAI_EXTRA_HEADERS`(JSON)를 `ChatOpenAI(de
 
 - **임베딩 서버는 이 repo 가 구동하지 않는다.** 사용자가 별도로 띄운 OpenAI 호환
   `/v1/embeddings` 엔드포인트에 접속만 한다. 연결 점검은 `tools/launch.py check-embedding`.
+- **임베딩 호출은 동일 로컬 머신 직결(프록시 미경유).** 패치가 `EMBEDDING_BASE_URL`
+  host 를 `NO_PROXY` 에 자동 등록해, `HTTP(S)_PROXY` 가 걸려 있어도 127.0.0.1
+  호출이 프록시로 새지 않는다. (LLM 게이트웨이는 다른 host 라 프록시/헤더 그대로)
 - BGE 모델은 임베딩 전용. gpt-oss(생성)와 역할이 다르므로 반드시 분리 운용.
 - `--source local` 은 웹에 접속하지 않는다(임베딩 유사도만). `web`/`hybrid` 만
   `RETRIEVER` 사용 — `tavily`는 `TAVILY_API_KEY` 필요, 키 없으면 `duckduckgo`(무키).

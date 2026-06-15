@@ -102,8 +102,10 @@ def _probe_embeddings(base: str) -> str:
     body = _json.dumps({"input": "ping", "model": os.getenv("EMBEDDING", "x").split(":", 1)[-1]}).encode()
     req = urllib.request.Request(url, data=body, method="POST",
                                 headers={"Content-Type": "application/json"})
+    # 임베딩은 로컬 직결 — 프록시 미경유
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
     try:
-        with urllib.request.urlopen(req, timeout=8) as r:
+        with opener.open(req, timeout=8) as r:
             data = _json.loads(r.read().decode("utf-8"))
         emb = data.get("data", [{}])[0].get("embedding")
         if isinstance(emb, list):

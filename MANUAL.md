@@ -224,6 +224,14 @@ python tools/launch.py check-embedding
 > (langchain 이 base64 응답을 요청해도 float 리스트 응답을 정상 파싱하므로,
 > 사용자 서버처럼 float 리스트를 반환해도 문제없다.)
 
+> 🔒 프록시 미경유(안전한 로컬 호출, 검증됨): 임베딩은 **동일 로컬 머신 직접
+> 호출**(127.0.0.1:8999)이므로 어떤 프록시도 타지 않는다. 시스템에 `HTTP_PROXY`/
+> `HTTPS_PROXY` 가 걸려 있어도, 패치가 import 시점에 EMBEDDING_BASE_URL 의 host 를
+> `NO_PROXY` 에 자동 등록해 **임베딩 호출이 프록시/외부로 새지 않게** 한다.
+> LLM(게이트웨이)은 다른 host 라 그대로 프록시/인증 헤더를 쓴다(영향 없음).
+> `check-embedding`·`doctor` 의 점검 호출도 프록시를 명시 우회한다.
+> (httpx·urllib 둘 다 가짜 프록시 env 하에서 직결 성공함을 실측 확인.)
+
 ### 3.3 tool-calling 우회 / 검색 (local 모드에선 검색 불요)
 
 `.env` 의 아래 값은 기본 그대로 둔다:
@@ -377,6 +385,8 @@ if scraped_data:
   - 패치 미적용 시 tiktoken **토큰ID 정수배열**(`[36155,104,...]`) 전송 → BGE 에서 깨짐 확인.
   - 서버가 float 리스트로 응답해도(base64 아니어도) langchain 이 정상 파싱 → dim=1024 수신.
   - `tools/check_embedding.py` 가 이 경로를 그대로 재현해 사용자 서버로 자가점검 가능.
+  - **프록시 미경유 검증**: 가짜 `HTTP(S)_PROXY` env 하에서 httpx·urllib 모두 직결 실패→
+    `NO_PROXY=127.0.0.1,localhost` 적용 시 200(dim=1024) 성공 확인. 패치가 이 NO_PROXY 를 자동 설정.
 - **실제 gpt-oss 엔드포인트 + BGE E2E 전체 실행은 사용자 환경에서 수행 예정.**
 
 ## 부록 C. 임베딩 서버 수정 필요 여부 (검색 측면 포함)
@@ -393,6 +403,7 @@ if scraped_data:
 | 응답 형식 | float 리스트 | ✅ langchain 이 base64 요청해도 float 리스트 정상 파싱 |
 | **정규화** | `normalize_embeddings=True` | ✅ **코사인 유사도 검색의 핵심** — 이미 충족 |
 | 쿼리/문서 인코딩 | 동일(대칭) | ✅ **bge-m3 는 쿼리 instruction prefix 불필요** → 대칭이 정답 |
+| 프록시 | 동일 로컬 머신 직접 호출 | ✅ 패치가 host 를 NO_PROXY 에 자동 등록 → **프록시 미경유(안전)** |
 
 > "검색"에 대한 핵심: `--source local` 에서는 웹 retriever(Tavily/DuckDuckGo)를 **쓰지
 > 않는다.** 로컬 문서 "검색" = 임베딩 코사인 유사도이고, 유사도 계산은
