@@ -15,8 +15,9 @@ gptr_oss_patch — GPT-Researcher × GPT-OSS 런타임 패치 (monkeypatch, repo
 환경변수:
   OPENAI_BASE_URL          LLM 엔드포인트 (예: http://localhost:11434/v1)
   OPENAI_API_KEY           SDK 필수값 충족용 (헤더 인증이면 'unused' 등 임의값)
-  OPENAI_EXTRA_HEADERS     LLM 전용 추가 헤더 (JSON 문자열). 예:
-                           {"Authorization":"Bearer xxx","X-Project-Id":"abc"}
+  OPENAI_EXTRA_HEADERS     LLM 전용 헤더 (JSON). SDK(ChatOpenAI)의 **default_headers**
+                           인자로 전달된다(deepdoc 방식). 예:
+                           {"x-ticket":"key_123","user_Id":"abcde"}
                            값에 플레이스홀더 사용 가능(패치가 치환, 프로세스당 1회):
                              ${uuid4}    → 36자 UUID4 (예: 3f9c...-...)
                              ${uuid4hex} → 32자 hex UUID
@@ -27,7 +28,8 @@ gptr_oss_patch — GPT-Researcher × GPT-OSS 런타임 패치 (monkeypatch, repo
                              예: X-Trace-Id,X-Session-Id
                            - 비워두면 비활성. LLM 호출에만 적용, 임베딩은 무관.
 
-  하드코딩 주입: .env 없이 코드에 변수명·값을 박아 강제하려면 _HARDCODED_LLM_HEADERS 딝셔너리 참고.
+  헤더 우선순위: 1) OPENAI_EXTRA_HEADERS(.env)  2) _HARDCODED_LLM_HEADERS(코드)  3) 없으면 헤더 없이 호출.
+                           (.env 가 있으면 그것만 사용, 없으면 하드코딩 폴백 — 병합 아님)
   EMBEDDING_BASE_URL       임베딩(BGE) 전용 엔드포인트 (예: http://127.0.0.1:8999/v1)
                            - LLM 과 분리. 헤더 주입 없음(요구사항).
   EMBEDDING_API_KEY        임베딩 SDK 필수값 충족용 (기본 'unused')
@@ -47,22 +49,31 @@ import uuid
 
 _APPLIED = False
 
-# ═══════════════════════════════════════════════════════════
-#  하드코딩 주입점 — gpt-oss 서비스가 "고정된 변수명"으로 UUID 를 요구할 때.
-#  .env 없이도 코드에 바로 박아 강제하려면 아래 딝셔너리에 변수명과 값을 적는다.
-#  - 값에 ${uuid4}/${uuid4hex}/${epoch} 플레이스홀더 사용 가능(각각 독립 생성).
-#  - .env 의 OPENAI_EXTRA_HEADERS 와 병합되며 동일 키는 .env 가 우선한다.
-#  - 예) 서비스가 변수 2개를 요구하면 주석 해제 후 이름을 실제 요구값으로 교체:
-# ═══════════════════════════════════════════════════════════
+# ===========================================================
+#  하드코딩 주입점 (2순위) — gpt-oss 서비스가 "고정 변수명"으로 헤더를 요구할 때.
+#  .env(OPENAI_EXTRA_HEADERS)가 없을 때만 이 딕셔너리가 사용된다(폴백).
+#  - 값은 정적 문자열 또는 ${uuid4}/${uuid4hex}/${epoch} 플레이스홀더(각각 독립 생성).
+#  - str(uuid.uuid4()) 처럼 파이썬 값을 직접 써도 된다(import 시 1회 평가 = 프로세스 고정).
+#  - 가장 원시적인 형태(서비스가 요구하는 변수명을 그대로):
+#      _HARDCODED_LLM_HEADERS = {
+#          "x-ticket":     "key_123",
+#          "user_Id":      "abcde",
+#          "extra_keys12": "${uuid4}",     # 또는 str(uuid.uuid4())
+#      }
+# ===========================================================
 _HARDCODED_LLM_HEADERS: dict = {
-    # "X-Trace-Id":   "${uuid4}",
-    # "X-Session-Id": "${uuid4}",
+    # "x-ticket":     "key_123",
+    # "user_Id":      "abcde",
+    # "extra_keys12": "${uuid4}",
 }
+
+# 마지막으로 결정된 헤더 소스(로그/디버그용): ".env" | "하드코딩" | "없음"
+_HEADER_SOURCE = "없음"
 
 
 def _expand_templates(value: str) -> str:
     """헤더 값의 플레이스홀더를 치환한다(프로세스당 1회, apply 시점).
-    ${uuid4} / ${uuid4hex} / ${epoch} 지원.
+    ${uuid4} / ${uuid4hex} / ${epoch} 지원. 일반 문자열은 그대로 통과.
     """
     if "${uuid4}" in value:
         value = value.replace("${uuid4}", str(uuid.uuid4()))
@@ -74,26 +85,38 @@ def _expand_templates(value: str) -> str:
 
 
 def _parse_extra_headers() -> dict:
-    """LLM 기본 헤더를 구성한다. 우선순위: 하드코딩(기본) ← .env(덮어쓰기).
-    모든 값에 ${uuid4} 등 플레이스홀더를 치환(헤더별 독립 uuid).
+    """LLM 기본 헤더(SDK 의 default_headers)를 구성한다.
+
+    우선순위(폴백 방식, 병합 아님):
+      1순위) .env 의 OPENAI_EXTRA_HEADERS (JSON) — 유효하면 이것만 사용.
+      2순위) 하드코딩 _HARDCODED_LLM_HEADERS — .env 가 없거나 비었거나 파싱 실패 시.
+      3) 둘 다 없으면 빈 dict → 헤더 없이 호출.
+    모든 값에 ${uuid4}/${uuid4hex}/${epoch} 플레이스홀더를 치환(헤더별 독립).
     """
-    headers: dict = {}
-    # 1) 하드코딩(변수명까지 코드 고정) — 먼저 적용
-    for k, v in _HARDCODED_LLM_HEADERS.items():
-        headers[str(k)] = _expand_templates(str(v))
-    # 2) .env 가 있으면 병합(동일 키는 .env 우선)
+    global _HEADER_SOURCE
+
+    # 1순위: .env
     raw = os.getenv("OPENAI_EXTRA_HEADERS")
-    if raw:
+    if raw and raw.strip():
         try:
             data = json.loads(raw)
-            if isinstance(data, dict):
-                for k, v in data.items():
-                    headers[str(k)] = _expand_templates(str(v))
-            else:
-                print(f"[gptr_oss_patch][WARN] OPENAI_EXTRA_HEADERS 는 JSON object 여야 함: {raw!r}")
+            if isinstance(data, dict) and data:
+                _HEADER_SOURCE = ".env"
+                return {str(k): _expand_templates(str(v)) for k, v in data.items()}
+            if not isinstance(data, dict):
+                print(f"[gptr_oss_patch][WARN] OPENAI_EXTRA_HEADERS 는 JSON object 여야 함: {raw!r} → 하드코딩 폴백")
+            # 빈 객체({})면 설정 없음으로 보고 폴백
         except json.JSONDecodeError as e:
-            print(f"[gptr_oss_patch][WARN] OPENAI_EXTRA_HEADERS JSON 파싱 실패: {e}")
-    return headers
+            print(f"[gptr_oss_patch][WARN] OPENAI_EXTRA_HEADERS JSON 파싱 실패: {e} → 하드코딩 폴백")
+
+    # 2순위: 하드코딩
+    if _HARDCODED_LLM_HEADERS:
+        _HEADER_SOURCE = "하드코딩"
+        return {str(k): _expand_templates(str(v)) for k, v in _HARDCODED_LLM_HEADERS.items()}
+
+    # 3) 없음
+    _HEADER_SOURCE = "없음"
+    return {}
 
 
 def _truthy(v: str | None, default: bool = False) -> bool:
@@ -191,8 +214,9 @@ def _patch_llm_default_headers() -> None:
 
     def _wrapped(cls, provider: str, chat_log=None, verbose: bool = True, **kwargs):
         if provider in _OPENAI_COMPATIBLE:
-            # langchain_openai.ChatOpenAI 는 default_headers 를 지원.
-            # 이미 사용자가 넣었으면 병합(사용자 우선).
+            # SDK 필수 인자 충족: langchain_openai.ChatOpenAI 는 헤더를
+            # **default_headers** 라는 이름으로 받는다(deepdoc 방식).
+            # 호출자가 이미 default_headers 를 넣었으면 그 값이 우선.
             if extra_headers:
                 merged = dict(extra_headers)
                 if "default_headers" in kwargs and isinstance(kwargs["default_headers"], dict):
@@ -207,9 +231,9 @@ def _patch_llm_default_headers() -> None:
     _base.GenericLLMProvider.from_provider = classmethod(_wrapped)
     if extra_headers:
         keys = ", ".join(sorted(extra_headers.keys()))
-        print(f"[gptr_oss_patch] LLM default_headers 주입 활성화: [{keys}]")
+        print(f"[gptr_oss_patch] LLM default_headers 주입({_HEADER_SOURCE}): [{keys}]")
     else:
-        print("[gptr_oss_patch] OPENAI_EXTRA_HEADERS 미설정 — LLM 정적 헤더 주입 없음")
+        print("[gptr_oss_patch] LLM 정적 헤더 없음(.env·하드코딩 모두 미설정) — 헤더 없이 호출")
     if uuid_headers:
         print(f"[gptr_oss_patch] LLM 요청당 UUID 헤더 활성화: {uuid_headers} (매 호출 헤더별 새 uuid4)")
 

@@ -187,49 +187,52 @@ STRATEGIC_LLM=openai:gpt-oss-120b
 - `provider` 는 `openai` 로 고정(= OpenAI 호환). `model` 만 서빙 중인 gpt-oss 이름으로.
 - 인증 헤더는 `OPENAI_EXTRA_HEADERS`(JSON)로. **임베딩에는 절대 적용되지 않는다.**
 
-#### 3.1.1 기본 헤더에 UUID 넣기 (두 가지 방식)
+#### 3.1.1 기본 헤더 선언 — SDK `default_headers` + 우선순위(.env → 하드코딩)
 
-정적 JSON 문자열에는 `str(uuid.uuid4())` 같은 동적 값을 그대로 못 넣는다. 그래서 패치가
-두 가지 방식을 제공한다(모두 LLM 호출에만 적용, 임베딩 무관 — 실측 검증 완료).
+gpt-oss 서비스가 디폴트 헤더에 고정 변수명을 요구할 때 쓴다. 헤더는 SDK(`ChatOpenAI`)의
+필수 인자 이름인 **`default_headers`** 로 전달된다(deepdoc 방식 — 패치가 자동 처리).
 
-> 서비스가 **고정 변수명 2개**를 요구하는 경우: 두 방식 모두 **헤더 이름을 그대로 지정**하고
-> 각 헤더에 서로 다른 UUID 가 들어간다(아래 예시·실측 검증 완료).
+**우선순위(폴백 방식, 병합 아님):**
+1. **`.env`** 의 `OPENAI_EXTRA_HEADERS`(JSON) 가 유효하면 → **그것만** 사용.
+2. `.env` 가 없거나 비었거나 파싱 실패면 → 코드의 **`_HARDCODED_LLM_HEADERS`** 사용.
+3. 둘 다 없으면 → **헤더 없이** 호출.
 
-**방식 A — 프로세스당 1회 UUID ("기본 헤더", 권장/간단):**
-`.env` 의 `OPENAI_EXTRA_HEADERS` 값에 플레이스홀더 `${uuid4}` 를 쓴다. 패치가 apply 시점에
-구체 UUID 로 치환하고(헤더별 독립 uuid), 그 값이 세션 동안 고정된다.
+원시 형태(서비스가 요구하는 변수명을 그대로, 정적값·UUID 혼용):
 
-```dotenv
-# 서비스가 요구하는 고정 변수명 2개 예시(이름은 실제 요구값으로 교체):
-OPENAI_EXTRA_HEADERS={"X-Trace-Id":"${uuid4}","X-Session-Id":"${uuid4}","Authorization":"Bearer xxxxx"}
+```python
+# 패치가 SDK 에 넘기는 최종 형태
+default_headers = {
+    "x-ticket":     "key_123",
+    "user_Id":      "abcde",
+    "extra_keys12": "3f9c...-...",   # uuid4
+}
 ```
-지원 플레이스홀더: `${uuid4}`(36자) / `${uuid4hex}`(32자) / `${epoch}`(유닉스 초).
 
-**방식 B — 요청당 새 UUID (request-id/추적용):**
-`.env` 에 헤더 이름만 지정하면, 패치가 httpx 이벤트 훅으로 **매 LLM 호출마다 새 uuid4** 를 붙인다.
-**쉼표로 여러 개**(예: 2개) 지정하면 각 헤더가 각기 다른 uuid4 를 받는다.
-
+**1순위 — `.env` (권장):**
 ```dotenv
-OPENAI_DYNAMIC_UUID_HEADER=X-Trace-Id,X-Session-Id
+# 값에 ${uuid4} / ${uuid4hex} / ${epoch} 플레이스홀더 사용 가능(헤더별 독립 생성, 세션 고정)
+OPENAI_EXTRA_HEADERS={"x-ticket":"key_123","user_Id":"abcde","extra_keys12":"${uuid4}"}
 ```
-- default_headers(정적)보다 우선해 매 호출 갱신(동기·비동기 모두). 한 번의 리서치에서
-  수십회 LLM 호출 각각에 서로 다른 요청 ID 가 붙는다.
-- 방식 A와 같은 헤더명을 쓰면 B가 덮어쓴다(즉, 요청당 값이 우선).
 
-**어떤 방식을 쓸까:** 서비스가 "기본 헤더에 고정 변수명 2개"를 요구하면 → **방식 A**(세션 고정)
-가 부합. 매 호출 고유 추적ID 가 필요하면 → **방식 B**. 둘을 섞어도 된다(서로 다른 헤더명).
+**2순위 — 하드코딩** (`.env` 없이 변수명까지 코드 고정; `patches/gptr_oss_patch.py`):
+```python
+_HARDCODED_LLM_HEADERS = {
+    "x-ticket":     "key_123",
+    "user_Id":      "abcde",
+    "extra_keys12": "${uuid4}",        # 또는 str(uuid.uuid4()) — import 시 1회 평가
+}
+```
+- `.env` 가 설정돼 있으면 이 딕셔너리는 **무시**된다(폴백 전용). 패키지/이미지에 고정값을
+  굽혀 배포할 때 유용.
 
-**하드코딩 주입(.env 없이 변수명까지 코드 고정):** `patches/gptr_oss_patch.py`
-- `_HARDCODED_LLM_HEADERS` 딝셔너리 — 주석 해제 후 변수명과 값을 적으면 된다(값에 `${uuid4}` 가능).
-  .env 와 병합되며 동일 키는 .env 가 우선. 패키지/이미지에 고정값을 굽혀 배포할 때 유용.
-  ```python
-  _HARDCODED_LLM_HEADERS = {
-      "X-Trace-Id":   "${uuid4}",
-      "X-Session-Id": "${uuid4}",
-  }
-  ```
-- 그 밖 규칙 변경 위치: 정적 치환 `_expand_templates()`, 요청당 훅 `_inject_uuid_request_hook()`.
-- 단순 고정값은 `.env` 의 `OPENAI_EXTRA_HEADERS` 에 직접 적는 게 가장 간단.
+**(선택) 요청당 새 UUID** — request-id/추적용. 매 LLM 호출마다 헤더값을 새 uuid4 로 갱신:
+```dotenv
+OPENAI_DYNAMIC_UUID_HEADER=X-Trace-Id,X-Session-Id   # 쉼표로 N개, 헤더별 독립 uuid
+```
+- httpx 이벤트 훅으로 동기·비동기 모두 적용. default_headers(정적)와 같은 헤더명을 쓰면
+  요청당 값이 우선한다. (서비스가 "세션 고정"을 원하면 이건 쓰지 않는다.)
+
+> 하드코딩 규칙 변경 위치: 정적 치환 `_expand_templates()`, 요청당 훅 `_inject_uuid_request_hook()`.
 
 ### 3.2 임베딩(BGE) — 별도 운영 중인 엔드포인트 연결 (local 모드 필수)
 

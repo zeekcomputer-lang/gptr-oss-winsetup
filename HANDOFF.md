@@ -42,9 +42,10 @@ Windows: `setup.bat / check-embedding.bat / prepare-data.bat / research-local.ba
 
 ## §3. 패치가 하는 일 (`gptr_oss_patch.py`)
 
-1. **LLM default_headers 주입** — `OPENAI_EXTRA_HEADERS`(JSON) 를 OpenAI 호환 provider 에만. 임베딩엔 미주입.
-   - 값 템플릿 치환: `${uuid4}` / `${uuid4hex}` / `${epoch}` (헤더별 독립, 프로세스당 1회).
-   - **하드코딩 주입점**: `_HARDCODED_LLM_HEADERS` 딕셔너리(변수명까지 코드 고정. .env 와 병합, .env 우선).
+1. **LLM default_headers 주입** — 헤더를 SDK(ChatOpenAI)의 **`default_headers`** 인자로 전달(deepdoc 방식). OpenAI 호환 provider 에만, 임베딩엔 미주입.
+   - **우선순위(폴백, 병합 아님)**: 1) `.env` OPENAI_EXTRA_HEADERS  2) `_HARDCODED_LLM_HEADERS`(코드)  3) 둘 다 없으면 헤더 없이 호출. (.env 가 있으면 하드코딩 무시)
+   - 값 템플릿 치환: `${uuid4}` / `${uuid4hex}` / `${epoch}` (헤더별 독립, 프로세스당 1회). 결정된 소스는 `_HEADER_SOURCE` 에 기록.
+   - 하드코딩 주입점: `_HARDCODED_LLM_HEADERS` 딕셔너리(변수명까지 코드 고정, 값에 `${uuid4}` 또는 정적값).
 2. **요청당 UUID 헤더** — `OPENAI_DYNAMIC_UUID_HEADER`(쉼표로 N개) 지정 시 httpx 이벤트 훅으로 매 호출 새 uuid4. sync+async 모두.
 3. **임베딩 base_url 분리** — `EMBEDDING_BASE_URL` 로 BGE 라우팅, `check_embedding_ctx_length=False` 주입(원문 텍스트 전송 보장).
 4. **임베딩 프록시 미경유** — `EMBEDDING_BASE_URL` host 를 `NO_PROXY` 에 자동 등록(동일 로컬 머신 직결). LLM 은 영향 없음.
