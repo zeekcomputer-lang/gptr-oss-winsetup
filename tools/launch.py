@@ -21,6 +21,7 @@ from __future__ import annotations
 import os
 import sys
 import urllib.request
+import urllib.error
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -31,6 +32,7 @@ from _common import (  # noqa: E402
 BGE_SERVER = ROOT / "bge_server" / "bge_server.py"
 RUN_RESEARCH = ROOT / "tools" / "run_research.py"
 PREPARE_DATA = ROOT / "tools" / "prepare_data.py"
+CHECK_EMBEDDING = ROOT / "tools" / "check_embedding.py"
 
 
 def _ensure_setup() -> None:
@@ -88,11 +90,40 @@ def cmd_research(argv: list[str]) -> int:
 
 
 def _probe(url: str) -> str:
+    """GET 프로브. 4xx/5xx 응답도 서버가 살아있다는 뜻이므로 REACHABLE 로 간주."""
     try:
         with urllib.request.urlopen(url, timeout=3) as r:
             return f"OK({r.status})"
+    except urllib.error.HTTPError as e:
+        return f"REACHABLE(HTTP {e.code})"
     except Exception as e:
         return f"FAIL({type(e).__name__})"
+
+
+def _probe_embeddings(base: str) -> str:
+    """임베딩 서버는 /health 가 없을 수 있으므로 /v1/embeddings 에 실제 POST 로 확인."""
+    import json as _json
+    url = base.rstrip("/") + "/embeddings"
+    body = _json.dumps({"input": "ping", "model": os.getenv("EMBEDDING", "x").split(":", 1)[-1]}).encode()
+    req = urllib.request.Request(url, data=body, method="POST",
+                                headers={"Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=8) as r:
+            data = _json.loads(r.read().decode("utf-8"))
+        emb = data.get("data", [{}])[0].get("embedding")
+        if isinstance(emb, list):
+            return f"OK(dim={len(emb)})"
+        if isinstance(emb, str):
+            return "OK(base64)"
+        return "WARN(응답형식 확인필요)"
+    except Exception as e:
+        return f"FAIL({type(e).__name__})"
+
+
+def cmd_embed_check(argv: list[str]) -> int:
+    # 임베딩 서버 호환성 점검 (vendor 불요, stdlib only)
+    py = str(venv_python()) if venv_exists() else sys.executable
+    return run([py, str(CHECK_EMBEDDING), *argv], check=False)
 
 
 def cmd_doctor(argv: list[str]) -> int:
@@ -113,19 +144,20 @@ def cmd_doctor(argv: list[str]) -> int:
     hdr = os.getenv("OPENAI_EXTRA_HEADERS")
     print(f"  OPENAI_EXTRA_HEADERS = {'set' if hdr else '(none)'}")
     if base:
-        root = base.rstrip("/").rsplit("/v1", 1)[0]
         print(f"  LLM   /v1/models   : {_probe(base.rstrip('/') + '/models')}")
     if emb:
-        print(f"  BGE   /health      : {_probe(emb.rstrip('/').rsplit('/v1',1)[0] + '/health')}")
+        # /health 가 없는 서버(사용자 BGE 등)도 있으므로 실제 임베딩 POST 로 점검
+        print(f"  BGE   /v1/embeddings: {_probe_embeddings(emb)}")
     return 0
 
 
-_CMDS = {"prepare": cmd_prepare, "bge": cmd_bge, "research": cmd_research, "doctor": cmd_doctor}
+_CMDS = {"prepare": cmd_prepare, "bge": cmd_bge, "research": cmd_research,
+         "check-embedding": cmd_embed_check, "doctor": cmd_doctor}
 
 
 def main() -> int:
     if len(sys.argv) < 2 or sys.argv[1] not in _CMDS:
-        print("사용법: python tools/launch.py [prepare|bge|research|doctor] ...")
+        print("사용법: python tools/launch.py [prepare|bge|research|check-embedding|doctor] ...")
         return 2
     return _CMDS[sys.argv[1]](sys.argv[2:])
 

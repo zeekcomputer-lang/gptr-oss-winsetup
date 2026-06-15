@@ -10,7 +10,7 @@ GPT-Researcher를 **GPT-OSS(로컬/사내 OpenAI 호환 LLM)** 로 구동하기 
 | 항목 | 방식 |
 |------|------|
 | **LLM 호출** | OpenAI 호환 `base_url` + `default_headers`(deep-doc-pipeline 패턴). 게이트웨이/프록시 인증 헤더를 **LLM 호출에만** 주입 |
-| **임베딩** | 로컬 **BGE 서버**(`bge_server/`, OpenAI 호환 `/v1/embeddings`). **커스텀 헤더 없음**, LLM과 **별도 base_url**로 완전 분리 |
+| **임베딩** | 로컬 **BGE 서버**(내 서버 연결 권장; 번들 `bge_server/` 대안 제공). OpenAI 호환 `/v1/embeddings`, **커스텀 헤더 없음**, LLM과 **별도 base_url**로 완전 분리 |
 | **tool-calling 우회** | `MCP_STRATEGY=disabled` + `supports_tools()→False` 강제. 메인 파이프라인은 애초에 function-calling 미사용 |
 | **원본 무수정** | `patches/gptr_oss_patch.py` 런타임 패치(멱등). repo는 `vendor/`에 clone |
 | **Windows** | setup(무거움)/launch(가벼움) 분리, `.bat`은 thin wrapper만 |
@@ -26,6 +26,7 @@ gptr-oss-winsetup/
 │  ├─ setup.py                 # 1회성 셋업 (venv + vendoring + 의존성 + .env + data/)
 │  ├─ launch.py                # 반복 실행 (prepare / bge / research / doctor)
 │  ├─ prepare_data.py          # jsonl/csv/json → data/docs/*.md 변환기 (로컬 데이터)
+│  ├─ check_embedding.py       # 내 BGE 임베딩 서버 호환성 점검 (stdlib)
 │  └─ run_research.py          # 리서치 엔트리포인트 (--source web|local|hybrid)
 ├─ examples/sample-corpus.jsonl # 로컬 데이터 형식 예제(3건)
 ├─ data/                       # raw/(원본) + docs/(변환본=DOC_PATH). git 제외
@@ -63,8 +64,8 @@ POSIX(WSL/Linux/macOS)에서는 동일하게 `python tools/setup.py`, `python to
 REM 1) jsonl/csv/json → data\docs\*.md 변환 (원본 gpt-researcher는 jsonl 미지원이라 변환 필요)
 windows\prepare-data.bat "data\raw\corpus.jsonl" --content-field text --clean
 
-REM 2) BGE 임베딩 서버 기동 (별도 창)
-windows\start-bge.bat
+REM 2) 임베딩 서버: "내 BGE 서버"(:8999) 기동 후 .env 의 EMBEDDING_BASE_URL 지정
+REM    → 호환성 검증:  windows\check-embedding.bat   (대안: 번들 windows\start-bge.bat)
 
 REM 3) 로컬 데이터 기반 보고서 생성
 windows\research-local.bat "우리 데이터 핵심 요약" --report-type detailed_report
@@ -72,7 +73,7 @@ windows\research-local.bat "우리 데이터 핵심 요약" --report-type detail
 ```bash
 # POSIX
 python tools/launch.py prepare data/raw/corpus.jsonl --content-field text --clean
-python tools/launch.py bge
+python tools/launch.py check-embedding   # 내 BGE 서버 호환성 검증 (대안: launch.py bge)
 python tools/launch.py research "우리 데이터 핵심 요약" --source local
 ```
 
@@ -93,9 +94,11 @@ STRATEGIC_LLM=openai:gpt-oss-120b
 # OPENAI_EXTRA_HEADERS={"Authorization":"Bearer xxx","X-Project-Id":"abc"}
 
 # 임베딩 (로컬 BGE) — LLM과 별도, 헤더 없음
-EMBEDDING=openai:BAAI/bge-m3
-EMBEDDING_BASE_URL=http://127.0.0.1:7997/v1
+# 기본은 "내 BGE 서버"(bge-m3-korean, :8999). 번들 서버 쓸 때는 BAAI/bge-m3 + :7997.
+EMBEDDING=openai:bge-m3-korean
+EMBEDDING_BASE_URL=http://127.0.0.1:8999/v1
 EMBEDDING_API_KEY=unused
+# 설정 후 검증:  python tools/launch.py check-embedding
 
 # tool-calling 우회
 MCP_STRATEGY=disabled

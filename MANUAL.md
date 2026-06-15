@@ -18,7 +18,7 @@
         │
         │   ┌─────────────────────────────────────────┐
         │   │ LLM(gpt-oss)  : 외부 OpenAI호환 API 호출  │  (시나리오 2)
-        │   │ 임베딩(BGE)    : 로컬 서버(127.0.0.1:7997) │
+        │   │ 임베딩(BGE)    : 내 로컬 서버(127.0.0.1:8999) │
         │   └─────────────────────────────────────────┘
         ▼
 python tools/launch.py research "질의" --source local      (시나리오 3)
@@ -189,32 +189,61 @@ STRATEGIC_LLM=openai:gpt-oss-120b
 
 ### 3.2 임베딩(BGE) — 로컬 서버 (local 모드 필수)
 
-`.env` 임베딩 구간(기본값 그대로면 대부분 OK):
+#### 옵션 A (권장) — 이미 운영 중인 "내 BGE 서버" 연결
+
+이미 로컬에서 BGE 임베딩 서버(예: `bge-m3-korean`, 포트 8999)를 돌리고 있다면
+**설치 불필요** — `.env` 에서 그 서버를 가리키기만 하면 된다. 기본값이 이미 그 구조에 맞춰져 있다:
+
+```dotenv
+EMBEDDING=openai:bge-m3-korean              # provider=openai 고정, model=서버 응답 이름
+EMBEDDING_BASE_URL=http://127.0.0.1:8999/v1 # 서버의 /v1 경로 (다른 PC면 127.0.0.1 -> IP)
+EMBEDDING_API_KEY=unused
+```
+
+> 사용자 서버 계약(제공해주신 예): `host="0.0.0.0", port=8999`, `POST /v1/embeddings`,
+> `model.encode(..., normalize_embeddings=True)` -> float 리스트 반환. 이 계약은
+> gpt-researcher 와 그대로 호환된다(독립 검증 완료, 부록 B 참조).
+
+**호환성 검증** (서버를 띄운 상태에서 실행):
+
+```bat
+windows\check-embedding.bat
+```
+```bash
+python tools/launch.py check-embedding
+```
+-> `[check_embedding][OK] 정상. 벡터 N개, dim=1024` 이 나오면 연동 준비 완료.
+(`doctor` 도 `BGE /v1/embeddings: OK(dim=...)` 로 같은 점검을 한다.)
+
+#### 옵션 B (대안) — repo 내장 BGE 서버 사용
+
+별도 서버가 없으면 `bge_server/` 로 구동. `.env` 를 아래로 바꿔 쓴다:
 
 ```dotenv
 EMBEDDING=openai:BAAI/bge-m3
 EMBEDDING_BASE_URL=http://127.0.0.1:7997/v1
-EMBEDDING_API_KEY=unused
-BGE_MODEL=BAAI/bge-m3      # 다국어/한국어 우수. 영어전용이면 bge-large-en-v1.5
+BGE_MODEL=BAAI/bge-m3
 BGE_PORT=7997
-# BGE_DEVICE=cuda          # GPU 있으면 권장(미설정 시 자동감지)
+# BGE_DEVICE=cuda
 ```
-
-BGE 서버 기동(**별도 창에서 계속 실행 상태로 둔다**):
 
 ```bat
-REM Windows
-windows\start-bge.bat
+windows\start-bge.bat        REM 별도 창에서 계속 실행
 ```
 ```bash
-# WSL/Linux/macOS
 python tools/launch.py bge
 ```
 
-- 첫 기동 시 모델 다운로드(수백 MB~1GB) 발생. 완료되면
-  `[bge_server] 로딩 완료. dim=...` 출력 후 대기 상태가 된다.
-- 동작 확인(다른 창에서): `curl http://127.0.0.1:7997/health` → `{"status":"ok",...}`.
-- GPU 미보유 시 CPU로도 동작(임베딩은 가벼움). 대용량이면 `BGE_DEVICE=cuda` 권장.
+- 첫 기동 시 모델 다운로드(수백 MB~1GB). `[bge_server] 로딩 완료. dim=...` 후 대기.
+- 내장 서버는 `/health` 제공 -> `curl http://127.0.0.1:7997/health`.
+- GPU 미보유 시 CPU로도 동작. 대용량이면 `BGE_DEVICE=cuda` 권장.
+
+> 주의(호환성 핵심, 검증됨): gpt-researcher 는 langchain 으로 임베딩을 호출한다.
+> 본 repo 패치가 `check_embedding_ctx_length=False` 를 자동 주입해 서버에 **원문 텍스트**를
+> 보낸다. 이 패치가 없으면 langchain 이 OpenAI 전용 tiktoken 토큰ID(정수배열)를 전송해
+> BGE 임베딩이 깨진다. import 시 자동 적용되므로 추가 조치는 불필요하다.
+> (langchain 이 base64 응답을 요청해도 float 리스트 응답을 정상 파싱하므로,
+> 사용자 서버처럼 float 리스트를 반환해도 문제없다.)
 
 ### 3.3 tool-calling 우회 / 검색 (local 모드에선 검색 불요)
 
@@ -242,7 +271,8 @@ python tools/launch.py doctor
 다음이 모두 충족되어야 한다:
 
 - `local docs : N .md` — N ≥ 1 (시나리오 1 완료)
-- BGE `/health : OK` — 임베딩 서버 가동 중 (시나리오 2 완료)
+- BGE `/v1/embeddings : OK(dim=...)` — 임베딩 서버 응답 정상 (시나리오 2 완료).
+  `python tools/launch.py check-embedding` 으로 단독 검증 가능
 - `OPENAI_BASE_URL` 설정됨, LLM `/v1/models : OK` — gpt-oss 접속 가능
 
 ### 4.2 실행 (로컬 데이터 기반)
@@ -305,7 +335,7 @@ ls -t outputs/ | head; cat "outputs/$(ls -t outputs | head -1)"
 | 변환 `생성: 0 파일` | 본문 필드 자동추정 실패 | `--content-field <실제키>` 지정 |
 | `DOC_PATH 에 문서가 없습니다` | 변환 미실행 / 경로 불일치 | 시나리오 1 재실행, `--doc-path` 확인 |
 | `EMBEDDING_BASE_URL 미설정` 경고 | .env 임베딩 구간 누락 | `.env` 임베딩 값 채우고 BGE 기동 |
-| BGE `/health : FAIL` | 서버 미기동/포트 충돌 | `start-bge.bat` 실행, `BGE_PORT` 변경 |
+| BGE `/v1/embeddings : FAIL` | 서버 미기동/포트/URL 불일치 | 내 BGE 서버 기동 확인, `EMBEDDING_BASE_URL` 점검, `check-embedding` 실행 |
 | LLM `/v1/models : FAIL` | gpt-oss 엔드포인트/헤더 오류 | `OPENAI_BASE_URL`, `OPENAI_EXTRA_HEADERS` 점검 |
 | 보고서가 비거나 짧음 | 매칭 컨텍스트 부족 | 데이터 보강, `CURATE_SOURCES=false`, `hybrid` 시도 |
 | jsonl 파싱 skip 로그 | 깨진 줄(중간 줄바꿈 등) | 해당 줄 수정. 변환기는 깨진 줄만 건너뛰고 계속 진행 |
@@ -321,8 +351,9 @@ python tools/setup.py
 # 1) 데이터 준비: jsonl -> data/docs/*.md
 python tools/launch.py prepare data/raw/corpus.jsonl --content-field text --clean
 
-# 2) 임베딩 서버 기동(별도 창 유지)
-python tools/launch.py bge
+# 2) 임베딩 서버: "내 BGE 서버"를 띄우고(포트 8999) .env 에 EMBEDDING_BASE_URL 지정
+#    (대안) 번들 서버:  python tools/launch.py bge
+python tools/launch.py check-embedding      # 임베딩 서버 호환성 검증
 
 # 2') .env 에 OPENAI_BASE_URL / 모델 / (선택)헤더 입력
 
@@ -362,5 +393,10 @@ if scraped_data:
 - jsonl→md 변환기: 더미 코퍼스로 동작 확인(필드 자동추정/메타 보존/깨진 줄 skip).
 - 전체 파이썬 모듈 `py_compile` 통과.
 - `run_research.py --source/--doc-path` 인자 파싱 확인.
-- **실제 gpt-oss 엔드포인트 + BGE E2E 실행은 사용자 환경에서 수행 예정**
-  (이 repo는 환경 비의존 부분까지 검증).
+- **임베딩 호환성 독립 검증 완료** (langchain_openai 1.3.2 실제 설치 + 사용자 서버
+  계약 모사 mock 대상):
+  - 패치 적용 시 langchain 이 서버에 **원문 텍스트**(`"첫 번째 문서..."`) 전송 → 정상.
+  - 패치 미적용 시 tiktoken **토큰ID 정수배열**(`[36155,104,...]`) 전송 → BGE 에서 깨짐 확인.
+  - 서버가 float 리스트로 응답해도(base64 아니어도) langchain 이 정상 파싱 → dim=1024 수신.
+  - `tools/check_embedding.py` 가 이 경로를 그대로 재현해 사용자 서버로 자가점검 가능.
+- **실제 gpt-oss 엔드포인트 + BGE E2E 전체 실행은 사용자 환경에서 수행 예정.**
