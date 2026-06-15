@@ -1,10 +1,19 @@
-# 런처 자체 의존성은 표준 라이브러리만 사용 (간단 .env 로더 내장).
-# 아래는 참고용 — 실제 설치는 tools/setup.py 가 수행한다.
+# 이 repo 의 런처(tools/*.py)는 표준 라이브러리만 사용한다(간단 .env 로더 내장).
+# 실제 의존성 설치는 tools/setup.py 가 수행하므로 보통 이 파일을 직접 쓸 일은 없다.
 #
-# [gpt-researcher] vendor/gpt-researcher/requirements.txt 로 설치
-# [retriever]      duckduckgo-search
-# [BGE 서버]       fastapi, uvicorn, sentence-transformers, torch
+# 설치 대상:
+#   [gpt-researcher] vendor/gpt-researcher/requirements.txt  (라이브러리로만 사용)
+#   [retriever]      duckduckgo-search                       (web/hybrid 모드용, 무키)
 #
-# 직접 설치하려면:
-#   pip install -r vendor/gpt-researcher/requirements.txt
-#   pip install duckduckgo-search fastapi uvicorn sentence-transformers torch
+# ※ 임베딩(BGE) 서버는 이 repo 가 설치/구동하지 않는다(사용자가 별도 운영).
+#    따라서 torch / sentence-transformers / fastapi / uvicorn 은 설치하지 않는다.
+#
+# ※ Python 3.14: gpt-researcher 의 numpy 상한(<2.3.0)이 cp314 휠을 막으므로
+#    setup.py 가 상한을 완화(>=2.3.0)하고 --prefer-binary 로 휠 우선 설치한다.
+#    (원본 vendor 는 수정하지 않고 .gptr-build-requirements.txt 로 파생)
+#
+# 수동 설치가 필요하면(권장하지 않음):
+#   python tools/setup.py        # 위 과정을 자동 수행
+#   # 또는 직접:
+#   pip install --prefer-binary -r vendor/gpt-researcher/requirements.txt
+#   pip install --prefer-binary duckduckgo-search

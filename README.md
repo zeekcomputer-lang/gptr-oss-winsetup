@@ -4,6 +4,7 @@ GPT-Researcher를 **GPT-OSS(로컬/사내 OpenAI 호환 LLM)** 로 구동하기 
 원본 [gpt-researcher](https://github.com/assafelovic/gpt-researcher)는 **수정하지 않고** vendoring + 런타임 monkeypatch로 연동한다.
 
 > 📄 **내 로컬 데이터(jsonl)로 문서 작성**하려면 → [`MANUAL.md`](MANUAL.md) (시나리오 1·2·3 상세 가이드)
+> 🧩 **유지보수·다음 작업자(AI 포함)** → [`HANDOFF.md`](HANDOFF.md) (구조·설계결정·검증상태·체크리스트)
 
 ## 핵심 설계
 
@@ -30,7 +31,8 @@ gptr-oss-winsetup/
 ├─ examples/sample-corpus.jsonl # 로컬 데이터 형식 예제(3건)
 ├─ data/                       # raw/(원본) + docs/(변환본=DOC_PATH). git 제외
 ├─ windows/                    # .bat thin wrapper (setup/prepare-data/check-embedding/research[-local]/doctor)
-├─ MANUAL.md                   # 로컬 데이터 문서작성 실행 가이드(시나리오 1·2·3)
+├─ MANUAL.md                   # 로컬 데이터 문서작성 실행 가이드(시나리오 1·2·3 + 부록 A~D)
+├─ HANDOFF.md                  # 다음 작업자 인수인계(구조·결정·검증·체크리스트)
 ├─ .env.example                # 환경설정 템플릿
 └─ vendor/gpt-researcher/      # (셋업 시 clone) 원본 repo
 ```
