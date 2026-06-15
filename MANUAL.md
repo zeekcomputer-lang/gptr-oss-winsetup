@@ -400,3 +400,59 @@ if scraped_data:
   - 서버가 float 리스트로 응답해도(base64 아니어도) langchain 이 정상 파싱 → dim=1024 수신.
   - `tools/check_embedding.py` 가 이 경로를 그대로 재현해 사용자 서버로 자가점검 가능.
 - **실제 gpt-oss 엔드포인트 + BGE E2E 전체 실행은 사용자 환경에서 수행 예정.**
+
+## 부록 C. 임베딩 서버 수정 필요 여부 (검색 측면 포함)
+
+**결론: 파이프라인 정확성·검색 품질 관점에서 서버 수정은 불필요하다.** 제공된
+`bge-m3-korean` 서버는 그대로 연동된다. 근거와 점검 항목은 아래와 같다.
+
+### C.1 수정 불필요 (검증 완료)
+
+| 항목 | 사용자 서버 | 판정 |
+|------|-------------|------|
+| OpenAI 호환 `POST /v1/embeddings` | 구현됨 | ✅ langchain 이 호출하는 유일 엔드포인트 |
+| 추가 필드(`encoding_format`,`dimensions`,`user`) 수용 | Pydantic v2 기본 `extra=ignore` | ✅ 422 안 남(실측 확인) |
+| 응답 형식 | float 리스트 | ✅ langchain 이 base64 요청해도 float 리스트 정상 파싱 |
+| **정규화** | `normalize_embeddings=True` | ✅ **코사인 유사도 검색의 핵심** — 이미 충족 |
+| 쿼리/문서 인코딩 | 동일(대칭) | ✅ **bge-m3 는 쿼리 instruction prefix 불필요** → 대칭이 정답 |
+
+> "검색"에 대한 핵심: `--source local` 에서는 웹 retriever(Tavily/DuckDuckGo)를 **쓰지
+> 않는다.** 로컬 문서 "검색" = 임베딩 코사인 유사도이고, 유사도 계산은
+> gpt-researcher(langchain) 쪽에서 수행한다. **서버는 정규화된 벡터만 반환하면 되며,
+> 서버에 별도 검색/랭킹 기능을 넣을 필요가 없다.** normalize=True 가 이미 있으므로
+> 검색 품질 측면의 서버 수정도 불필요하다.
+>
+> (참고) 만약 모델이 `bge-large-en-v1.5` 였다면 쿼리에 instruction prefix 를 붙이는 게
+> 권장되지만, **bge-m3 계열은 prefix 가 불필요**하므로 현재 대칭 인코딩이 올바르다.
+
+### C.2 선택적 개선 (필수 아님 — 운영 견고성)
+
+단일 사용자/소규모면 무시해도 된다. 다중 동시 요청·대용량에서만 의미.
+
+1. **이벤트 루프 블로킹(동시성)** — `async def create_embeddings` 안에서 동기
+   `model.encode(...)` 를 호출하면 그 사이 이벤트 루프가 막힌다. gpt-researcher 가
+   하위질의를 병렬로 임베딩 요청하면 직렬화·지연이 생길 수 있다(정확성에는 무영향).
+   개선: 핸들러를 `def`(동기)로 바꿔 FastAPI 스레드풀에 맡기거나 `run_in_executor` 사용.
+
+   ```python
+   # 동시성 개선 예: async def → def 로 변경 (FastAPI 가 자동으로 스레드풀에서 실행)
+   @app.post("/v1/embeddings")
+   def create_embeddings(request: EmbeddingRequest):
+       ...
+   ```
+
+2. **대용량 배치 타임아웃** — langchain 은 최대 `chunk_size`(기본 1000)건을 1회 POST 로
+   보낸다. sentence-transformers 가 내부적으로 batch 처리하므로 OOM 위험은 낮으나,
+   1000건 인코딩이 길어지면 클라이언트 타임아웃이 날 수 있다. 필요 시 `model.encode(...,
+   batch_size=32)` 명시 또는 서버 타임아웃 여유 확보.
+
+3. **(선택) `/health`, `/v1/models` 추가** — 파이프라인엔 불필요(본 repo `doctor` 는
+   `/v1/embeddings` POST 로 점검). 모니터링/로드밸런서가 필요하면 추가하면 편하다.
+
+### C.3 권장 점검 순서
+
+```bash
+# 서버를 띄운 뒤
+python tools/launch.py check-embedding     # OK(dim=...) 확인이면 연동 끝
+python tools/launch.py doctor              # BGE /v1/embeddings: OK 재확인
+```
