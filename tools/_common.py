@@ -17,6 +17,13 @@ VENDOR_DIR = ROOT / "vendor" / "gpt-researcher"
 VENV_DIR = ROOT / ".venv"
 OUTPUTS_DIR = ROOT / "outputs"
 
+# 로컬 데이터 파이프라인 경로
+#   DATA_RAW_DIR : 원본 jsonl/csv/json 투입 위치
+#   DOCS_DIR     : 변환 산출물(.md). gpt-researcher 의 DOC_PATH 기본값과 일치시킨다.
+DATA_DIR = ROOT / "data"
+DATA_RAW_DIR = DATA_DIR / "raw"
+DOCS_DIR = DATA_DIR / "docs"
+
 GPTR_REPO_URL = "https://github.com/assafelovic/gpt-researcher.git"
 GPTR_PIN = os.getenv("GPTR_PIN", "")  # 비우면 기본 브랜치 최신
 

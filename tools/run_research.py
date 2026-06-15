@@ -35,6 +35,8 @@ _VENDOR = ROOT / "vendor" / "gpt-researcher"
 if _VENDOR.exists():
     sys.path.insert(0, str(_VENDOR))
 
+DEFAULT_DOC_PATH = ROOT / "data" / "docs"
+
 
 def _load_dotenv() -> None:
     """간단 .env 로더 (python-dotenv 없이도 동작). 기존 환경변수 우선."""
@@ -53,7 +55,8 @@ def _load_dotenv() -> None:
         os.environ.setdefault(key, val)
 
 
-async def _run(query: str, report_type: str, tone_name: str, verbose: bool) -> str:
+async def _run(query: str, report_type: str, tone_name: str, verbose: bool,
+               report_source: str) -> str:
     # 패치는 gpt_researcher import 전에 import 되어도 되고 후에도 됨(멱등)
     import gptr_oss_patch  # noqa: F401  (import 시 자동 apply)
 
@@ -65,6 +68,7 @@ async def _run(query: str, report_type: str, tone_name: str, verbose: bool) -> s
     researcher = GPTResearcher(
         query=query,
         report_type=report_type,
+        report_source=report_source,
         tone=tone,
         verbose=verbose,
     )
@@ -78,6 +82,11 @@ def main() -> int:
 
     ap = argparse.ArgumentParser(description="GPT-Researcher × GPT-OSS runner")
     ap.add_argument("query", help="리서치 질의")
+    ap.add_argument("--source", default=os.getenv("REPORT_SOURCE", "web"),
+                    choices=["web", "local", "hybrid"],
+                    help="web(기본)|local|hybrid")
+    ap.add_argument("--doc-path", default=None,
+                    help="로컬 문서 디렉터리 (source=local/hybrid). 기본 data/docs 또는 .env DOC_PATH")
     ap.add_argument("--report-type", default="research_report")
     ap.add_argument("--tone", default="Objective")
     ap.add_argument("--out", default=None)
@@ -89,14 +98,32 @@ def main() -> int:
     if not os.getenv("OPENAI_BASE_URL"):
         print("[run_research][WARN] OPENAI_BASE_URL 미설정 — LLM 엔드포인트를 확인하세요.")
 
+    # 소스/문서경로 해석 — gpt_researcher 는 REPORT_SOURCE / DOC_PATH 환경변수를 읽는다.
+    report_source = args.source
+    os.environ["REPORT_SOURCE"] = report_source
+    if report_source in ("local", "hybrid"):
+        doc_path = args.doc_path or os.getenv("DOC_PATH") or str(DEFAULT_DOC_PATH)
+        doc_dir = Path(doc_path)
+        os.environ["DOC_PATH"] = str(doc_dir)
+        md_count = len(list(doc_dir.glob("*.md"))) if doc_dir.exists() else 0
+        if not doc_dir.exists() or md_count == 0:
+            print(f"[run_research][WARN] DOC_PATH 에 문서가 없습니다: {doc_dir} "
+                  f"— 먼저 'python tools/prepare_data.py <jsonl>' 로 변환하세요.")
+        else:
+            print(f"[run_research] source={report_source} DOC_PATH={doc_dir} (md {md_count}건)")
+        if not os.getenv("EMBEDDING_BASE_URL"):
+            print("[run_research][WARN] EMBEDDING_BASE_URL 미설정 — local 모드는 BGE 임베딩 서버가 필요합니다.")
+
     out_path = Path(args.out) if args.out else (
         ROOT / "outputs" / f"report-{time.strftime('%Y%m%d-%H%M%S')}.md"
     )
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
-    print(f"[run_research] query={args.query!r} type={args.report_type} tone={args.tone}")
+    print(f"[run_research] query={args.query!r} type={args.report_type} "
+          f"tone={args.tone} source={report_source}")
     try:
-        report = asyncio.run(_run(args.query, args.report_type, args.tone, args.verbose))
+        report = asyncio.run(_run(args.query, args.report_type, args.tone,
+                                  args.verbose, report_source))
     except Exception as e:
         print(f"[run_research][ERROR] 리서치 실패: {type(e).__name__}: {e}", file=sys.stderr)
         return 1

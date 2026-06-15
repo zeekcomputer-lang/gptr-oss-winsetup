@@ -9,6 +9,9 @@ vendor/
 outputs/
 *.log
 
+# 로컬 데이터(사용자 코퍼스/변환본) — git 에 올리지 않음. examples/ 는 추적함.
+data/
+
 # python
 __pycache__/
 *.pyc

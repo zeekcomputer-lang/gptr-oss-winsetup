@@ -3,6 +3,8 @@
 GPT-Researcher를 **GPT-OSS(로컬/사내 OpenAI 호환 LLM)** 로 구동하기 위한 **Windows 올인원 셋업** repo.
 원본 [gpt-researcher](https://github.com/assafelovic/gpt-researcher)는 **수정하지 않고** vendoring + 런타임 monkeypatch로 연동한다.
 
+> 📄 **내 로컬 데이터(jsonl)로 문서 작성**하려면 → [`MANUAL.md`](MANUAL.md) (시나리오 1·2·3 상세 가이드)
+
 ## 핵심 설계
 
 | 항목 | 방식 |
@@ -20,11 +22,15 @@ gptr-oss-winsetup/
 ├─ patches/gptr_oss_patch.py   # 런타임 패치: LLM 헤더 주입 / 임베딩 base_url 분리 / tool-calling 차단
 ├─ bge_server/bge_server.py    # 로컬 BGE 임베딩 서버 (OpenAI 호환, 헤더 없음)
 ├─ tools/
-│  ├─ _common.py               # 공유 유틸 (경로/venv/플랫폼)
-│  ├─ setup.py                 # 1회성 셋업 (venv + vendoring + 의존성 + .env)
-│  ├─ launch.py                # 반복 실행 (bge / research / doctor)
-│  └─ run_research.py          # 리서치 엔트리포인트 (패치 적용 후 GPTResearcher 실행)
-├─ windows/                    # .bat thin wrapper (setup/start-bge/research/doctor)
+│  ├─ _common.py               # 공유 유틸 (경로/venv/플랫폼/데이터 경로)
+│  ├─ setup.py                 # 1회성 셋업 (venv + vendoring + 의존성 + .env + data/)
+│  ├─ launch.py                # 반복 실행 (prepare / bge / research / doctor)
+│  ├─ prepare_data.py          # jsonl/csv/json → data/docs/*.md 변환기 (로컬 데이터)
+│  └─ run_research.py          # 리서치 엔트리포인트 (--source web|local|hybrid)
+├─ examples/sample-corpus.jsonl # 로컬 데이터 형식 예제(3건)
+├─ data/                       # raw/(원본) + docs/(변환본=DOC_PATH). git 제외
+├─ windows/                    # .bat thin wrapper (setup/prepare-data/start-bge/research[-local]/doctor)
+├─ MANUAL.md                   # 로컬 데이터 문서작성 실행 가이드(시나리오 1·2·3)
 ├─ .env.example                # 환경설정 템플릿
 └─ vendor/gpt-researcher/      # (셋업 시 clone) 원본 repo
 ```
@@ -48,6 +54,29 @@ windows\doctor.bat
 ```
 
 POSIX(WSL/Linux/macOS)에서는 동일하게 `python tools/setup.py`, `python tools/launch.py bge`, `python tools/launch.py research "..."`.
+
+## 로컬 데이터(jsonl) 기반 문서 작성
+
+웹 대신 **내 로컬 데이터**로 보고서를 만들려면 (웹 미접속, BGE 임베딩 유사도만 사용):
+
+```bat
+REM 1) jsonl/csv/json → data\docs\*.md 변환 (원본 gpt-researcher는 jsonl 미지원이라 변환 필요)
+windows\prepare-data.bat "data\raw\corpus.jsonl" --content-field text --clean
+
+REM 2) BGE 임베딩 서버 기동 (별도 창)
+windows\start-bge.bat
+
+REM 3) 로컬 데이터 기반 보고서 생성
+windows\research-local.bat "우리 데이터 핵심 요약" --report-type detailed_report
+```
+```bash
+# POSIX
+python tools/launch.py prepare data/raw/corpus.jsonl --content-field text --clean
+python tools/launch.py bge
+python tools/launch.py research "우리 데이터 핵심 요약" --source local
+```
+
+예제 데이터: `examples/sample-corpus.jsonl`. 전체 절차는 **[`MANUAL.md`](MANUAL.md)** 참조.
 
 ## 환경설정 (.env)
 

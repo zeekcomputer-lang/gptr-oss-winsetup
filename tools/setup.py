@@ -22,7 +22,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _common import (  # noqa: E402
-    ROOT, VENDOR_DIR, VENV_DIR, OUTPUTS_DIR, GPTR_REPO_URL, GPTR_PIN,
+    ROOT, VENDOR_DIR, VENV_DIR, OUTPUTS_DIR, DATA_RAW_DIR, DOCS_DIR,
+    GPTR_REPO_URL, GPTR_PIN,
     venv_python, venv_exists, vendor_exists, run, py_exe, section, is_windows,
 )
 
@@ -102,7 +103,9 @@ def verify(skip_bge: bool) -> None:
         if rc2 != 0:
             raise SystemExit("검증 실패: BGE 의존성 import 불가")
     OUTPUTS_DIR.mkdir(exist_ok=True)
-    print("  outputs/ 준비 완료")
+    DATA_RAW_DIR.mkdir(parents=True, exist_ok=True)
+    DOCS_DIR.mkdir(parents=True, exist_ok=True)
+    print("  outputs/ , data/raw/ , data/docs/ 준비 완료")
 
 
 def main() -> int:
@@ -124,7 +127,10 @@ def main() -> int:
     print("다음 단계:")
     print("  1) .env 편집 — OPENAI_BASE_URL / 모델명 / (선택)OPENAI_EXTRA_HEADERS")
     print("  2) 임베딩 서버:  python tools/launch.py bge")
-    print("  3) 리서치 실행:  python tools/launch.py research \"질의\"")
+    print("  3-a) 웹 리서치 :  python tools/launch.py research \"질의\"")
+    print("  3-b) 로컬 데이터:  python tools/launch.py prepare data/raw/<파일>.jsonl")
+    print("                → python tools/launch.py research \"질의\" --source local")
+    print("  자세한 시나리오는 MANUAL.md 참조")
     return 0
 
 

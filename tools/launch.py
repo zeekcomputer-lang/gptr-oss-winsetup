@@ -2,12 +2,15 @@
 launch — 반복 실행 (가벼움)
 
 서브커맨드:
+  prepare "<입력>" [opts]      로컬 데이터(jsonl/csv/json) → data/docs(.md) 변환
   bge                          BGE 임베딩 서버 기동 (포그라운드)
   research "<질의>" [opts]     리서치 실행 → outputs/ 저장
   doctor                       환경 점검 (venv/vendor/.env/엔드포인트)
 
 사용:
+  python tools/launch.py prepare data/raw/corpus.jsonl --content-field text
   python tools/launch.py bge
+  python tools/launch.py research "우리 데이터 핵심 요약" --source local
   python tools/launch.py research "양자내성암호 2026 표준화 동향" --report-type research_report
   python tools/launch.py doctor
 
@@ -22,11 +25,12 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _common import (  # noqa: E402
-    ROOT, VENDOR_DIR, OUTPUTS_DIR, venv_python, venv_exists, vendor_exists, run,
+    ROOT, VENDOR_DIR, OUTPUTS_DIR, DOCS_DIR, venv_python, venv_exists, vendor_exists, run,
 )
 
 BGE_SERVER = ROOT / "bge_server" / "bge_server.py"
 RUN_RESEARCH = ROOT / "tools" / "run_research.py"
+PREPARE_DATA = ROOT / "tools" / "prepare_data.py"
 
 
 def _ensure_setup() -> None:
@@ -59,6 +63,15 @@ def _load_env_into_os() -> None:
         os.environ.setdefault(k, v)
 
 
+def cmd_prepare(argv: list[str]) -> int:
+    # prepare 는 vendor/.env 불요(순수 변환). venv 만 있으면 venv python, 없으면 현재 python.
+    if not argv:
+        print('[launch] 사용법: prepare "<입력 .jsonl/.json/.csv 또는 디렉터리>" [--content-field ...]')
+        return 2
+    py = str(venv_python()) if venv_exists() else sys.executable
+    return run([py, str(PREPARE_DATA), *argv], check=False)
+
+
 def cmd_bge(argv: list[str]) -> int:
     _ensure_setup()
     _load_env_into_os()
@@ -88,6 +101,10 @@ def cmd_doctor(argv: list[str]) -> int:
     print(f"  venv         : {'OK' if venv_exists() else 'MISSING'}")
     print(f"  vendor gptr  : {'OK' if vendor_exists() else 'MISSING'}")
     print(f"  .env         : {'OK' if (ROOT / '.env').exists() else 'MISSING'}")
+    md_count = len(list(DOCS_DIR.glob("*.md"))) if DOCS_DIR.exists() else 0
+    print(f"  local docs   : {md_count} .md @ {DOCS_DIR}")
+    print(f"  REPORT_SOURCE      = {os.getenv('REPORT_SOURCE', '(unset/web)')}")
+    print(f"  DOC_PATH           = {os.getenv('DOC_PATH', '(unset)')}")
     base = os.getenv("OPENAI_BASE_URL", "")
     emb = os.getenv("EMBEDDING_BASE_URL", "")
     print(f"  OPENAI_BASE_URL    = {base or '(unset)'}")
@@ -103,12 +120,12 @@ def cmd_doctor(argv: list[str]) -> int:
     return 0
 
 
-_CMDS = {"bge": cmd_bge, "research": cmd_research, "doctor": cmd_doctor}
+_CMDS = {"prepare": cmd_prepare, "bge": cmd_bge, "research": cmd_research, "doctor": cmd_doctor}
 
 
 def main() -> int:
     if len(sys.argv) < 2 or sys.argv[1] not in _CMDS:
-        print("사용법: python tools/launch.py [bge|research|doctor] ...")
+        print("사용법: python tools/launch.py [prepare|bge|research|doctor] ...")
         return 2
     return _CMDS[sys.argv[1]](sys.argv[2:])
 
