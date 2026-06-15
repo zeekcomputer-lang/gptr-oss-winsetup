@@ -23,8 +23,11 @@ gptr_oss_patch — GPT-Researcher × GPT-OSS 런타임 패치 (monkeypatch, repo
                              ${epoch}    → 유닉스 초
                            예: {"X-Request-Id":"${uuid4}","Authorization":"Bearer xxx"}
   OPENAI_DYNAMIC_UUID_HEADER  설정하면 해당 이름의 헤더를 **매 요청마다 새 UUID4** 로
-                           붙인다(httpx 이벤트 훅). 예: X-Request-Id
+                           붙인다(httpx 이벤트 훅). 쉼표로 여러 개 지정 가능(헤더별 독립 uuid):
+                             예: X-Trace-Id,X-Session-Id
                            - 비워두면 비활성. LLM 호출에만 적용, 임베딩은 무관.
+
+  하드코딩 주입: .env 없이 코드에 변수명·값을 박아 강제하려면 _HARDCODED_LLM_HEADERS 딝셔너리 참고.
   EMBEDDING_BASE_URL       임베딩(BGE) 전용 엔드포인트 (예: http://127.0.0.1:8999/v1)
                            - LLM 과 분리. 헤더 주입 없음(요구사항).
   EMBEDDING_API_KEY        임베딩 SDK 필수값 충족용 (기본 'unused')
@@ -44,6 +47,18 @@ import uuid
 
 _APPLIED = False
 
+# ═══════════════════════════════════════════════════════════
+#  하드코딩 주입점 — gpt-oss 서비스가 "고정된 변수명"으로 UUID 를 요구할 때.
+#  .env 없이도 코드에 바로 박아 강제하려면 아래 딝셔너리에 변수명과 값을 적는다.
+#  - 값에 ${uuid4}/${uuid4hex}/${epoch} 플레이스홀더 사용 가능(각각 독립 생성).
+#  - .env 의 OPENAI_EXTRA_HEADERS 와 병합되며 동일 키는 .env 가 우선한다.
+#  - 예) 서비스가 변수 2개를 요구하면 주석 해제 후 이름을 실제 요구값으로 교체:
+# ═══════════════════════════════════════════════════════════
+_HARDCODED_LLM_HEADERS: dict = {
+    # "X-Trace-Id":   "${uuid4}",
+    # "X-Session-Id": "${uuid4}",
+}
+
 
 def _expand_templates(value: str) -> str:
     """헤더 값의 플레이스홀더를 치환한다(프로세스당 1회, apply 시점).
@@ -59,17 +74,26 @@ def _expand_templates(value: str) -> str:
 
 
 def _parse_extra_headers() -> dict:
+    """LLM 기본 헤더를 구성한다. 우선순위: 하드코딩(기본) ← .env(덮어쓰기).
+    모든 값에 ${uuid4} 등 플레이스홀더를 치환(헤더별 독립 uuid).
+    """
+    headers: dict = {}
+    # 1) 하드코딩(변수명까지 코드 고정) — 먼저 적용
+    for k, v in _HARDCODED_LLM_HEADERS.items():
+        headers[str(k)] = _expand_templates(str(v))
+    # 2) .env 가 있으면 병합(동일 키는 .env 우선)
     raw = os.getenv("OPENAI_EXTRA_HEADERS")
-    if not raw:
-        return {}
-    try:
-        data = json.loads(raw)
-        if isinstance(data, dict):
-            return {str(k): _expand_templates(str(v)) for k, v in data.items()}
-        print(f"[gptr_oss_patch][WARN] OPENAI_EXTRA_HEADERS 는 JSON object 여야 함: {raw!r}")
-    except json.JSONDecodeError as e:
-        print(f"[gptr_oss_patch][WARN] OPENAI_EXTRA_HEADERS JSON 파싱 실패: {e}")
-    return {}
+    if raw:
+        try:
+            data = json.loads(raw)
+            if isinstance(data, dict):
+                for k, v in data.items():
+                    headers[str(k)] = _expand_templates(str(v))
+            else:
+                print(f"[gptr_oss_patch][WARN] OPENAI_EXTRA_HEADERS 는 JSON object 여야 함: {raw!r}")
+        except json.JSONDecodeError as e:
+            print(f"[gptr_oss_patch][WARN] OPENAI_EXTRA_HEADERS JSON 파싱 실패: {e}")
+    return headers
 
 
 def _truthy(v: str | None, default: bool = False) -> bool:
@@ -78,14 +102,20 @@ def _truthy(v: str | None, default: bool = False) -> bool:
     return v.strip().lower() in ("1", "true", "yes", "on")
 
 
-def _inject_uuid_request_hook(kwargs: dict, header_name: str) -> None:
+def _inject_uuid_request_hook(kwargs: dict, header_names) -> None:
     """ChatOpenAI 에 전달할 http_client / http_async_client 를 생성해
-    매 요청마다 header_name 에 새 uuid4 를 붙이는 이벤트 훅을 달아준다.
+    매 요청마다 header_names 각각에 새 uuid4 를 붙이는 이벤트 훅을 달아준다.
 
+    - header_names 는 문자열(1개) 또는 리스트(N개). 각 헤더는 서로 다른 uuid4 를 받는다.
     - default_headers(정적)와 달리 요청당 값이 갱신된다(request-id 용도).
     - 사용자가 이미 http_client 를 넘겼으면 손대지 않는다.
     - httpx 미설치 등 실패 시 조용히 건너뛴다(정적 헤더는 영향 없음).
     """
+    if isinstance(header_names, str):
+        header_names = [header_names]
+    header_names = [h for h in header_names if h]
+    if not header_names:
+        return
     try:
         import httpx
     except Exception as e:  # pragma: no cover
@@ -93,10 +123,12 @@ def _inject_uuid_request_hook(kwargs: dict, header_name: str) -> None:
         return
 
     def _sync_hook(request):
-        request.headers[header_name] = str(uuid.uuid4())
+        for name in header_names:
+            request.headers[name] = str(uuid.uuid4())
 
     async def _async_hook(request):
-        request.headers[header_name] = str(uuid.uuid4())
+        for name in header_names:
+            request.headers[name] = str(uuid.uuid4())
 
     if "http_client" not in kwargs:
         kwargs["http_client"] = httpx.Client(event_hooks={"request": [_sync_hook]})
@@ -147,7 +179,8 @@ def _patch_llm_default_headers() -> None:
         return
 
     extra_headers = _parse_extra_headers()
-    uuid_header = (os.getenv("OPENAI_DYNAMIC_UUID_HEADER") or "").strip()
+    # 요청당 UUID 헤더 이름 — 쉼표로 구분해 여러 개 지정 가능(예: "X-Trace-Id,X-Session-Id")
+    uuid_headers = [h.strip() for h in (os.getenv("OPENAI_DYNAMIC_UUID_HEADER") or "").split(",") if h.strip()]
     # default_headers 를 받는 OpenAI 호환 provider 화이트리스트
     _OPENAI_COMPATIBLE = {
         "openai", "azure_openai", "dashscope", "deepseek", "openrouter",
@@ -165,9 +198,9 @@ def _patch_llm_default_headers() -> None:
                 if "default_headers" in kwargs and isinstance(kwargs["default_headers"], dict):
                     merged.update(kwargs["default_headers"])
                 kwargs["default_headers"] = merged
-            # 요청당 새 UUID 헤더 — httpx 이벤트 훅으로 매 호출마다 갱신
-            if uuid_header:
-                _inject_uuid_request_hook(kwargs, uuid_header)
+            # 요청당 새 UUID 헤더 — httpx 이벤트 훅으로 매 호출마다 갱신(헤더별 독립 uuid)
+            if uuid_headers:
+                _inject_uuid_request_hook(kwargs, uuid_headers)
         return _orig(cls, provider, chat_log=chat_log, verbose=verbose, **kwargs)
 
     _wrapped._oss_patched = True
@@ -177,8 +210,8 @@ def _patch_llm_default_headers() -> None:
         print(f"[gptr_oss_patch] LLM default_headers 주입 활성화: [{keys}]")
     else:
         print("[gptr_oss_patch] OPENAI_EXTRA_HEADERS 미설정 — LLM 정적 헤더 주입 없음")
-    if uuid_header:
-        print(f"[gptr_oss_patch] LLM 요청당 UUID 헤더 활성화: {uuid_header} (매 호출 새 uuid4)")
+    if uuid_headers:
+        print(f"[gptr_oss_patch] LLM 요청당 UUID 헤더 활성화: {uuid_headers} (매 호출 헤더별 새 uuid4)")
 
 
 def _patch_embedding_base_url() -> None:

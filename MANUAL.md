@@ -192,29 +192,44 @@ STRATEGIC_LLM=openai:gpt-oss-120b
 정적 JSON 문자열에는 `str(uuid.uuid4())` 같은 동적 값을 그대로 못 넣는다. 그래서 패치가
 두 가지 방식을 제공한다(모두 LLM 호출에만 적용, 임베딩 무관 — 실측 검증 완료).
 
+> 서비스가 **고정 변수명 2개**를 요구하는 경우: 두 방식 모두 **헤더 이름을 그대로 지정**하고
+> 각 헤더에 서로 다른 UUID 가 들어간다(아래 예시·실측 검증 완료).
+
 **방식 A — 프로세스당 1회 UUID ("기본 헤더", 권장/간단):**
 `.env` 의 `OPENAI_EXTRA_HEADERS` 값에 플레이스홀더 `${uuid4}` 를 쓴다. 패치가 apply 시점에
-구체 UUID 로 치환하고, 그 값이 세션 동안 고정된다.
+구체 UUID 로 치환하고(헤더별 독립 uuid), 그 값이 세션 동안 고정된다.
 
 ```dotenv
-OPENAI_EXTRA_HEADERS={"Authorization":"Bearer xxxxx","X-Project-Id":"samsung","X-Request-Id":"${uuid4}"}
+# 서비스가 요구하는 고정 변수명 2개 예시(이름은 실제 요구값으로 교체):
+OPENAI_EXTRA_HEADERS={"X-Trace-Id":"${uuid4}","X-Session-Id":"${uuid4}","Authorization":"Bearer xxxxx"}
 ```
 지원 플레이스홀더: `${uuid4}`(36자) / `${uuid4hex}`(32자) / `${epoch}`(유닉스 초).
 
 **방식 B — 요청당 새 UUID (request-id/추적용):**
 `.env` 에 헤더 이름만 지정하면, 패치가 httpx 이벤트 훅으로 **매 LLM 호출마다 새 uuid4** 를 붙인다.
+**쉼표로 여러 개**(예: 2개) 지정하면 각 헤더가 각기 다른 uuid4 를 받는다.
 
 ```dotenv
-OPENAI_DYNAMIC_UUID_HEADER=X-Request-Id
+OPENAI_DYNAMIC_UUID_HEADER=X-Trace-Id,X-Session-Id
 ```
 - default_headers(정적)보다 우선해 매 호출 갱신(동기·비동기 모두). 한 번의 리서치에서
   수십회 LLM 호출 각각에 서로 다른 요청 ID 가 붙는다.
 - 방식 A와 같은 헤더명을 쓰면 B가 덮어쓴다(즉, 요청당 값이 우선).
 
-**하드코딩 위치(코드 직접 수정 시):** `patches/gptr_oss_patch.py`
-- 정적 치환 규칙: `_expand_templates()` — 플레이스홀더 추가하려면 여기.
-- 요청당 훅: `_inject_uuid_request_hook()` — 헤더명·값 규칙 변경 위치.
-- 고정 값을 그냥 박고 싶으면 `.env` 의 `OPENAI_EXTRA_HEADERS` 에 직접 적는 게 가장 간단.
+**어떤 방식을 쓸까:** 서비스가 "기본 헤더에 고정 변수명 2개"를 요구하면 → **방식 A**(세션 고정)
+가 부합. 매 호출 고유 추적ID 가 필요하면 → **방식 B**. 둘을 섞어도 된다(서로 다른 헤더명).
+
+**하드코딩 주입(.env 없이 변수명까지 코드 고정):** `patches/gptr_oss_patch.py`
+- `_HARDCODED_LLM_HEADERS` 딝셔너리 — 주석 해제 후 변수명과 값을 적으면 된다(값에 `${uuid4}` 가능).
+  .env 와 병합되며 동일 키는 .env 가 우선. 패키지/이미지에 고정값을 굽혀 배포할 때 유용.
+  ```python
+  _HARDCODED_LLM_HEADERS = {
+      "X-Trace-Id":   "${uuid4}",
+      "X-Session-Id": "${uuid4}",
+  }
+  ```
+- 그 밖 규칙 변경 위치: 정적 치환 `_expand_templates()`, 요청당 훅 `_inject_uuid_request_hook()`.
+- 단순 고정값은 `.env` 의 `OPENAI_EXTRA_HEADERS` 에 직접 적는 게 가장 간단.
 
 ### 3.2 임베딩(BGE) — 별도 운영 중인 엔드포인트 연결 (local 모드 필수)
 
