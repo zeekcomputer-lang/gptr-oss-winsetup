@@ -370,6 +370,7 @@ ls -t outputs/ | head; cat "outputs/$(ls -t outputs | head -1)"
 | LLM `/v1/models : FAIL` | gpt-oss 엔드포인트/헤더 오류 | `OPENAI_BASE_URL`, `OPENAI_EXTRA_HEADERS` 점검 |
 | 보고서가 비거나 짧음 | 매칭 컨텍스트 부족 | 데이터 보강, `CURATE_SOURCES=false`, `hybrid` 시도 |
 | jsonl 파싱 skip 로그 | 깨진 줄(중간 줄바꿈 등) | 해당 줄 수정. 변환기는 깨진 줄만 건너뛰고 계속 진행 |
+| 셋업 중 `numpy ... C/C++ 컴파일러`/`vswhere.exe not found` | Python 3.14 에서 numpy 상한핀(`<2.3.0`)이 cp314 휠 없는 범위라 소스빌드 시도 | **최신 setup 으로 재실행**(자동 해결: numpy 상한 완화+휠 우선). 컴파일러 설치 불필. 자세한 건 부록 D |
 
 ---
 
@@ -489,3 +490,32 @@ if scraped_data:
 python tools/launch.py check-embedding     # OK(dim=...) 확인이면 연동 끝
 python tools/launch.py doctor              # BGE /v1/embeddings: OK 재확인
 ```
+
+## 부록 D. Python 3.14 셋업 — numpy 소스빌드 / 컴파일러 오류 해결
+
+### 증상
+`windows\setup.bat` 실행 중 다음류 오류로 실패:
+- `numpy 2.x ... 소스 코드에서 빌드 ... C/C++ 컴파일러가 설치되어 있지 않습니다`
+- `Could not find C:\...\vswhere.exe` (Visual Studio 환경 활성화 실패)
+
+### 원인
+gpt-researcher 의 `requirements.txt` 가 **`numpy>=2.0.0,<2.3.0`** 으로 상한을 묶는다.
+그런데 **NumPy 의 cp314(Python 3.14) 사전 빌드 휠은 2.3.x 부터** 제공된다.
+→ `<2.3.0` 범위에는 3.14용 휠이 없어 pip 이 **소스 빌드**를 시도하고, 그러려면
+MSVC(C/C++ 컴파일러)가 필요해 `vswhere.exe` 탐색까지 실패한다.
+
+### 해결 (이 repo 가 자동 처리 — 컴파일러 설치 불필요)
+`tools/setup.py` 가 **원본 vendor 파일을 수정하지 않고** 설치 시점에 보정한다:
+1. venv 의 Python 버전을 감지.
+2. Python ≥ 3.14 이면 numpy 를 **cp314 휠로 선확보**: `pip install --only-binary=:all: "numpy>=2.3.0"`.
+3. requirements 의 numpy 줄만 상한 완화(`<2.3.0` → `>=2.3.0`)한 **파생 목록**
+   (`.gptr-build-requirements.txt`, git 제외)을 만들어 `pip install --prefer-binary -r ...` 로 설치.
+4. `--prefer-binary` 로 pandas/lxml/tiktoken 등 나머지도 휠 우선 → 소스 빌드 회피.
+
+Python 3.12/3.13 에서는 원본 핀을 그대로 사용한다(그 버전엔 휠이 있으므로 변경 불요).
+
+### 그래도 실패할 때
+- **인터넷/사내 인덱스에 cp314 휠이 없는 패키지**가 있으면 그 패키지만 소스 빌드가 필요할 수 있다.
+  이 경우 (a) 사내 PyPI 미러에 휠을 올리거나, (b) Python 3.12/3.13 venv 로 셋업하거나,
+  (c) 최후수단으로 "Microsoft C++ Build Tools" 설치.
+- numpy 만 강제로 휠 고정하려면: `.venv\Scripts\python -m pip install --only-binary=:all: "numpy>=2.3.0"`.

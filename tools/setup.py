@@ -18,7 +18,9 @@ setup — 1회성 셋업 (무거움)
 from __future__ import annotations
 
 import argparse
+import re
 import shutil
+import subprocess
 import sys
 from pathlib import Path
 
@@ -28,6 +30,8 @@ from _common import (  # noqa: E402
     GPTR_REPO_URL, GPTR_PIN,
     venv_python, venv_exists, vendor_exists, run, py_exe, section, is_windows,
 )
+
+BUILD_REQUIREMENTS = ROOT / ".gptr-build-requirements.txt"
 
 
 def make_venv() -> None:
@@ -53,19 +57,63 @@ def vendor_repo() -> None:
     run(args)
 
 
+def _venv_pyver() -> tuple[int, int]:
+    """venv 의 파이썬 버전(major, minor) 를 조회."""
+    try:
+        out = subprocess.run(
+            [str(venv_python()), "-c", "import sys;print('%d.%d' % sys.version_info[:2])"],
+            capture_output=True, text=True, check=True,
+        ).stdout.strip()
+        major, minor = (int(x) for x in out.split(".")[:2])
+        return (major, minor)
+    except Exception:
+        return sys.version_info[:2]
+
+
+def _materialize_requirements(src: Path, pyver: tuple[int, int]) -> Path:
+    """vendor requirements.txt 를 읽어 파생 설치 목록을 만든다(원본 무수정).
+
+    Python 3.14+ 에서는 'numpy>=2.0.0,<2.3.0' 의 상한이 cp314 휠 버전(2.3.x+)을
+    막아 소스 빌드를 유발하므로, numpy 상한만 완화해 휠 설치가 가능하게 한다.
+    원본 vendor 파일은 건드리지 않고 별도 파일(.gptr-build-requirements.txt)에 기록.
+    """
+    lines_out = []
+    relaxed = False
+    for raw in src.read_text(encoding="utf-8").splitlines():
+        s = raw.strip()
+        if pyver >= (3, 14) and re.match(r"^numpy\b", s):
+            lines_out.append("numpy>=2.3.0  # py3.14: cp314 wheel (orig: %s)" % s)
+            relaxed = True
+        else:
+            lines_out.append(raw)
+    BUILD_REQUIREMENTS.write_text("\n".join(lines_out) + "\n", encoding="utf-8")
+    if relaxed:
+        print(f"  [py{pyver[0]}.{pyver[1]}] numpy 상한 완화: <2.3.0 -> >=2.3.0 (cp314 휠 사용, 원본 무수정)")
+    return BUILD_REQUIREMENTS
+
+
 def pip_install() -> None:
     section("3/5 의존성 설치")
     vpy = str(venv_python())
     run([vpy, "-m", "pip", "install", "--upgrade", "pip", "setuptools", "wheel"])
 
+    pyver = _venv_pyver()
+    print(f"  venv Python = {pyver[0]}.{pyver[1]}")
+
     # gpt-researcher 런타임 의존성 (라이브러리 사용용)
     req = VENDOR_DIR / "requirements.txt"
     if req.exists():
-        run([vpy, "-m", "pip", "install", "-r", str(req)])
+        # Python 3.14+: numpy 를 cp314 휠로 먼저 확보해 소스 빌드를 차단 (best effort)
+        if pyver >= (3, 14):
+            run([vpy, "-m", "pip", "install", "--only-binary=:all:", "numpy>=2.3.0"], check=False)
+        build_req = _materialize_requirements(req, pyver)
+        # --prefer-binary: 휠이 있는 버전을 우선해 소스 빌드(컴파일러 필요)를 피한다
+        run([vpy, "-m", "pip", "install", "--prefer-binary", "-r", str(build_req)])
 
     # 검색 retriever (web/hybrid 모드용, 무키). local 전용이면 사실상 불필이나 고정메뉴상 설치.
-    run([vpy, "-m", "pip", "install", "duckduckgo-search"])
-    # ※ 임베딩 서버는 별도 운영 — torch/sentence-transformers 미설치.
+    run([vpy, "-m", "pip", "install", "--prefer-binary", "duckduckgo-search"])
+    # 임베딩 서버는 별도 운영 - torch/sentence-transformers 미설치.
+    # cp314 휠이 없는 패키지가 있으면 --prefer-binary 가 휠 있는 버전을 선택한다.
 
 
 def bootstrap_env() -> None:

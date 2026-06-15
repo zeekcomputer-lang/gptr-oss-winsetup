@@ -5,6 +5,9 @@ vendor/
 # env / secrets
 .env
 
+# setup 이 생성하는 파생 requirements (원본 vendor 미수정)
+.gptr-build-requirements.txt
+
 # outputs / logs
 outputs/
 *.log

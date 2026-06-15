@@ -136,3 +136,6 @@ OpenAI 호환 provider 생성 시 `OPENAI_EXTRA_HEADERS`(JSON)를 `ChatOpenAI(de
 - BGE 모델은 임베딩 전용. gpt-oss(생성)와 역할이 다르므로 반드시 분리 운용.
 - `--source local` 은 웹에 접속하지 않는다(임베딩 유사도만). `web`/`hybrid` 만
   `RETRIEVER` 사용 — `tavily`는 `TAVILY_API_KEY` 필요, 키 없으면 `duckduckgo`(무키).
+- **Python 3.14 셋업 시 numpy 컴파일러/`vswhere.exe` 오류**: gpt-researcher 가 `numpy<2.3.0`
+  을 묶는데 cp314 휠은 2.3.x부터라 소스빌드를 시도해 발생. setup 이 자동으로 numpy
+  상한을 완화하고 휠 우선 설치하므로 **컴파일러 설치 불필**. 상세는 MANUAL 부록 D.
