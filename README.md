@@ -116,6 +116,10 @@ OpenAI 호환 provider 생성 시 `OPENAI_EXTRA_HEADERS`(JSON)를 `ChatOpenAI(de
 **임베딩 경로(`Memory.__init__`)에는 헤더를 주입하지 않으며**, `EMBEDDING_BASE_URL`로 사용자 BGE 엔드포인트로만 라우팅한다.
 → "LLM은 인증 헤더, 임베딩은 헤더 없는 별도 모델" 요구사항을 코드 분리로 보장.
 
+**UUID 헤더**: gpt-oss 호출 헤더에 UUID 를 넣는 두 방식 — (A) `OPENAI_EXTRA_HEADERS` 값에
+`${uuid4}` 플레이스홀더(프로세스당 1회 고정), (B) `OPENAI_DYNAMIC_UUID_HEADER=X-Request-Id`
+(매 요청 새 uuid4, httpx 훅). 둘 다 LLM 전용·임베딩 무관. 상세는 MANUAL §3.1.1.
+
 ## gpt-oss 서빙 예시
 
 - **Ollama**: `ollama run gpt-oss:20b` → `OPENAI_BASE_URL=http://localhost:11434/v1`

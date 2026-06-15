@@ -187,6 +187,35 @@ STRATEGIC_LLM=openai:gpt-oss-120b
 - `provider` 는 `openai` 로 고정(= OpenAI 호환). `model` 만 서빙 중인 gpt-oss 이름으로.
 - 인증 헤더는 `OPENAI_EXTRA_HEADERS`(JSON)로. **임베딩에는 절대 적용되지 않는다.**
 
+#### 3.1.1 기본 헤더에 UUID 넣기 (두 가지 방식)
+
+정적 JSON 문자열에는 `str(uuid.uuid4())` 같은 동적 값을 그대로 못 넣는다. 그래서 패치가
+두 가지 방식을 제공한다(모두 LLM 호출에만 적용, 임베딩 무관 — 실측 검증 완료).
+
+**방식 A — 프로세스당 1회 UUID ("기본 헤더", 권장/간단):**
+`.env` 의 `OPENAI_EXTRA_HEADERS` 값에 플레이스홀더 `${uuid4}` 를 쓴다. 패치가 apply 시점에
+구체 UUID 로 치환하고, 그 값이 세션 동안 고정된다.
+
+```dotenv
+OPENAI_EXTRA_HEADERS={"Authorization":"Bearer xxxxx","X-Project-Id":"samsung","X-Request-Id":"${uuid4}"}
+```
+지원 플레이스홀더: `${uuid4}`(36자) / `${uuid4hex}`(32자) / `${epoch}`(유닉스 초).
+
+**방식 B — 요청당 새 UUID (request-id/추적용):**
+`.env` 에 헤더 이름만 지정하면, 패치가 httpx 이벤트 훅으로 **매 LLM 호출마다 새 uuid4** 를 붙인다.
+
+```dotenv
+OPENAI_DYNAMIC_UUID_HEADER=X-Request-Id
+```
+- default_headers(정적)보다 우선해 매 호출 갱신(동기·비동기 모두). 한 번의 리서치에서
+  수십회 LLM 호출 각각에 서로 다른 요청 ID 가 붙는다.
+- 방식 A와 같은 헤더명을 쓰면 B가 덮어쓴다(즉, 요청당 값이 우선).
+
+**하드코딩 위치(코드 직접 수정 시):** `patches/gptr_oss_patch.py`
+- 정적 치환 규칙: `_expand_templates()` — 플레이스홀더 추가하려면 여기.
+- 요청당 훅: `_inject_uuid_request_hook()` — 헤더명·값 규칙 변경 위치.
+- 고정 값을 그냥 박고 싶으면 `.env` 의 `OPENAI_EXTRA_HEADERS` 에 직접 적는 게 가장 간단.
+
 ### 3.2 임베딩(BGE) — 별도 운영 중인 엔드포인트 연결 (local 모드 필수)
 
 > 임베딩 서버는 **사용자가 별도 프로세스로 직접 기동**한다. 이 repo 는 서버를
