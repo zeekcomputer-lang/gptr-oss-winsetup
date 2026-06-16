@@ -350,7 +350,7 @@ def map_batch(batch: list[dict], query: str, payload_budget: int | None = None,
     분할 한계까지 실패한 문서는 건너뛴(커버리지 검증이 still_missing 으로 표시)."""
     if payload_budget is None:
         payload_budget = max(2000, int(os.getenv("CHRONO_MAX_INPUT_KB", "25")) * 1024
-                             - _PROMPT_OVERHEAD_BYTES)
+                             - _PROMPT_OVERHEAD_BYTES - _nbytes(_glossary_block()))
     try:
         return _map_once(batch, query)
     except Exception as e:  # noqa: BLE001
@@ -395,21 +395,46 @@ _REDUCE_USER_TMPL = (
 )
 
 
+def _reduce_once(pc: str, query: str) -> str:
+    sys_p = _REDUCE_SYSTEM.format(lang=_lang()) + _glossary_block()
+    usr_p = _REDUCE_USER_TMPL.format(lang=_lang(), query=query or "(미지정)", chunks=pc)
+    return _llm_call_resilient(sys_p, usr_p).strip()
+
+
+def _reduce_piece_adaptive(pc: str, query: str, min_bytes: int = 2000, verbose: bool = True) -> str:
+    """reduce 호출이 용량초과/타임아웃으로 죽으면 조각을 반으로 쪼개서 재시도.
+    더 이상 못 쪼개면 원문 조각을 그대로 보존(이벤트 누락 방지)."""
+    try:
+        return _reduce_once(pc, query)
+    except Exception as e:  # noqa: BLE001
+        if _nbytes(pc) > min_bytes:
+            halves = _split_by_budget(pc, max(min_bytes, _nbytes(pc) // 2 + 1))
+            if len(halves) > 1:
+                if verbose:
+                    print(f"[digest][WARN] reduce 조각 실패 → 분할 재시도"
+                          f"({_nbytes(pc)}B → {len(halves)}조각): {type(e).__name__}")
+                return "\n".join(_reduce_piece_adaptive(h, query, min_bytes, verbose)
+                                 for h in halves).strip()
+        print(f"[digest][ERROR] reduce 실패(분할 한계) → 조각 원문 보존: {type(e).__name__}: {e}")
+        return pc
+
+
 def reduce_text(text: str, payload_budget: int, query: str, max_levels: int = 5) -> str:
-    """합본이 예산 초과면 조각을 묶어 재귀 재요약(이벤트 보존, 산문 압축)."""
+    """합본이 예산 초과면 조각을 묶어 재귀 재요약(이벤트 보존, 산문 압축).
+    payload_budget 은 이미 (용어사전 포함) 시스템 프롬프트 오버헤드를 제외한 **유저 컨텐츠** 예산이다.
+    각 조각은 payload_budget 이하로 나눔 → system(REDUCE+용어사전)+user 총합이 한도 내."""
     level = 0
     while _nbytes(text) > payload_budget and level < max_levels:
         level += 1
-        # 예산 단위로 조각 분할 후 각 그룹을 재요약
-        pieces = _split_by_budget(text, payload_budget - _PROMPT_OVERHEAD_BYTES)
+        pieces = _split_by_budget(text, payload_budget)
         if len(pieces) <= 1:
             break
-        sys_p = _REDUCE_SYSTEM.format(lang=_lang()) + _glossary_block()
-        outs = []
-        for pc in pieces:
-            usr_p = _REDUCE_USER_TMPL.format(lang=_lang(), query=query or "(미지정)", chunks=pc)
-            outs.append(_llm_call_resilient(sys_p, usr_p).strip())
-        text = "\n".join(outs)
+        outs = [_reduce_piece_adaptive(pc, query) for pc in pieces]
+        new_text = "\n".join(outs)
+        if _nbytes(new_text) >= _nbytes(text):
+            # 더 이상 줄지 않으면(조각 보존 등) 무한루프 방지
+            break
+        text = new_text
     return text
 
 
@@ -488,12 +513,17 @@ def build_digest(doc_dir: Path, query: str, max_input_kb: int = 25,
     if not docs:
         raise RuntimeError(f"문서 없음: {doc_dir} — 먼저 prepare 로 변환하세요.")
     all_ids = {d["id"] for d in docs}
-    payload_budget = max(2000, max_input_kb * 1024 - _PROMPT_OVERHEAD_BYTES)
+    # 용어사전 블록(최대 8KB)은 map/reduce system 프롬프트에 매번 들어간다.
+    # 그 크기를 입력 예산에서 빼지 않으면 system+user 총합이 한도를 넘어 504 발생(용어사전 추가 후 회귀).
+    gloss_bytes = _nbytes(_glossary_block())
+    overhead = _PROMPT_OVERHEAD_BYTES + gloss_bytes
+    payload_budget = max(2000, max_input_kb * 1024 - overhead)
 
     batches = batch_docs(docs, payload_budget)
     if verbose:
+        extra = f", 용어사전 {gloss_bytes}B 반영" if gloss_bytes else ""
         print(f"[digest] 문서 {len(docs)}건 / 고유 id {len(all_ids)}개 / "
-              f"배치 {len(batches)}개 (입력예산 {payload_budget}B)")
+              f"배치 {len(batches)}개 (입력예산 {payload_budget}B{extra})")
 
     map_outputs: list[str] = []
     for bi, batch in enumerate(batches, 1):
