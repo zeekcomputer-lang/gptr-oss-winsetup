@@ -380,7 +380,8 @@ ls -t outputs/ | head; cat "outputs/$(ls -t outputs | head -1)"
 | `Resource 'punkt_tab' not found` | `.md` 로더(UnstructuredMarkdownLoader)가 NLTK 문장분할 사용 | **`prepare --format txt`(기본)** → TextLoader 경로로 NLTK 미경유. .md 유지 시 setup 프로비저닝으로 punkt_tab 확보. 부록 E |
 | `json_repair ... 'NoneType' object is not subscriptable` | gpt-oss 가 JSON 미준수 → 빈/None 응답 | `GPTR_AGENT_JSON_FALLBACK=1`(기본) → 패치가 기본 에이전트로 폴백(비치명). 보고서 품질을 위해 SMART_LLM 을 더 큰 모델로. 부록 E |
 | 문서 로드 실패 / 작업 취소 연쇄 | 위 리소스 예외가 async 단계에 전파 | 위 세 행 해소 적용. local 은 `--format txt` 가 가장 안전(부록 E) |
-| **digest 생성 중 게이트웨이 타임아웃/용량초과(504)** | map 배치당 입력(~22KB)+출력이 게이트웨이 한도 초과 | (1) `CHRONO_MAX_INPUT_KB` 하향(12~16) (2) `CHRONO_MAX_OUTPUT_TOKENS` 축소(기본 2000) (3) 자동 적응분할 재시도가 배치를 쪼개서 재처리(자동) (4) `GPTR_LLM_STREAM=1`(idle 504) (5) `LLM_TIMEOUT`/`LLM_MAX_RETRIES` 조정 |
+| **digest 생성 중 게이트웨이 타임아웃/용량초과(504)** | map/reduce 단일 요청이 게이트웨이 한도 초과 | (1) 자동 적응분할 재시도(map+reduce, 자동) (2) `CHRONO_MAX_INPUT_KB` 하향(12~16) (3) `GPTR_LLM_STREAM=1`(idle 504, 기본 ON) (4) `LLM_TIMEOUT`/`LLM_MAX_RETRIES` 조정. ⚠ `CHRONO_MAX_OUTPUT_TOKENS` 는 절대 과도하게 낮추지 말 것(reduce 가 마커를 잘라 커버리지 손실; 기본 8000). |
+| **digest 가 소수 문서만 참조(예: 60→2)** | 출력 cap 과소로 reduce 가 이벤트·`[[id]]` 마커 절단 | `CHRONO_MAX_OUTPUT_TOKENS` 를 올리거나 미설정(기본 8000). 최신 코드는 reduce 마커 보존+후처리 복원으로 누락 0 보장(`still_missing` 확인). |
 
 ---
 
