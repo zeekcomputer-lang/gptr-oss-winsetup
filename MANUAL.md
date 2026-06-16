@@ -484,6 +484,14 @@ python tools/launch.py doctor                          # glossary 상태 한 줄
 - **RAG**: 패치 `_patch_inject_glossary` 가 `PromptFamily.generate_report_*`(+subtopic) 보고서 프롬프트에 블록을 덧붙임. 한국어 강제보다 먼저 주입(순서: 기본 + 용어사전 + 한국어지시).
 - **chrono**: `build_digest._glossary_block()` 가 map/reduce 의 system 프롬프트에 첨부 → 다이제스트 단계부터 정의 일관.
 
+### 최종 보고서 말미 '용어집'(표) 부록 — chrono 전용 (기본 ON)
+chrono 모드 최종 산출물에서 **실제 쓰인 고유명만** 모아 말미에 `## 용어집` 표를 추가한다.
+- 표 컬럼: `용어 | 정의 | 출처`.  출처 = **사전**(초기 용어사전 파일) / **문서**(다이제스트에서 자동 추출).
+- **문서 유래 자동 추가**: 초기 용어집에 없더라도, 문서에 정의가 명확한 고유명은 1회 LLM 추출로 편입(추측 금지—본문 근거만).
+- 보고서에 등장하지 않은 용어는 표에서 제외. 표는 .md·.docx(비즈니스 표 서식) 모두 반영.
+- 비활성: `.env` 의 `GPTR_GLOSSARY_APPENDIX=0`. (콘텐츠 아닌 동작 토글이므로 env 사용)
+- 구현: `run_research._maybe_append_glossary` → `build_digest.extract_definitions`(`용어 ||| 정의` 줄형식, JSON 미준수 모델에도 강건) + `glossary.find_used_terms/render_glossary_table`.
+
 ---
 
 ## 부록 A. 동작 원리 — 왜 local 모드가 오프라인인가

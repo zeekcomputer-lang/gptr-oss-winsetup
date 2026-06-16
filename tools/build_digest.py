@@ -289,6 +289,58 @@ def reduce_text(text: str, payload_budget: int, query: str, max_levels: int = 5)
     return text
 
 
+# ──────────────────────────────────────────────────
+#  고유명·전문용어 정의 추출 (문서 유래 — 초기 용어집에 없더라도 본문에 정의가 명확한 것)
+# ──────────────────────────────────────────────────
+_EXTRACT_SYSTEM = (
+    "너는 문서에서 고유명·전문용어와 그 정의를 추출하는 분석가다. "
+    "본문에 정의가 명확히 제시된 항목만 추출한다. 추측·일반상식 보완 금지. 반드시 {lang} 로 작성."
+)
+_EXTRACT_USER_TMPL = (
+    "아래 문서에서 고유명/전문용어 중 '정의가 본문에 명확히 드러난' 것만 추출하라.\n"
+    "출력 형식(엄격): 한 줄에 하나씩 `용어 ||| 한 줄 정의`.\n"
+    "규칙:\n"
+    "1) 정의가 불확실하거나 본문에 없으면 제외(추측 금지).\n"
+    "2) 일반 명사·흔한 단어 제외. 고유명·약어·전문용어 위주.\n"
+    "3) 이미 알려진 용어는 제외: {known}\n"
+    "4) 머리말·맺음말·번호·불릿 없이 `용어 ||| 정의` 줄만 출력. 없으면 빈 출력.\n\n"
+    "=== 문서 시작 ===\n{doc}\n=== 문서 끝 ==="
+)
+
+
+def extract_definitions(text: str, known_terms: list[str] | None = None,
+                        max_input_kb: int | None = None) -> list[dict]:
+    """문서(다이제스트)에서 정의가 명확한 고유명/전문용어를 추출.
+    건전한 줄 형식(`용어 ||| 정의`)으로 받아 JSON 미준수 모델에도 강건. 실패해도 빈 리스트."""
+    if not text or not text.strip():
+        return []
+    if max_input_kb is None:
+        max_input_kb = int(os.getenv("CHRONO_MAX_INPUT_KB", "25"))
+    budget = max(2000, max_input_kb * 1024 - _PROMPT_OVERHEAD_BYTES)
+    if _nbytes(text) > budget:
+        text = text.encode("utf-8")[:budget].decode("utf-8", "ignore")
+    known = ", ".join(known_terms or []) or "(없음)"
+    sys_p = _EXTRACT_SYSTEM.format(lang=_lang())
+    usr_p = _EXTRACT_USER_TMPL.format(known=known, doc=text)
+    try:
+        out = LLM_CALL(sys_p, usr_p).strip()
+    except Exception as e:
+        print(f"[digest][WARN] 용어 정의 추출 실패(건너뜀): {type(e).__name__}: {e}")
+        return []
+    terms: list[dict] = []
+    seen: set[str] = set()
+    for line in out.splitlines():
+        line = re.sub(r'^\s*([-*•]|\d+[.)])\s+', '', line.strip()).strip()
+        if "|||" not in line:
+            continue
+        term, _, defi = line.partition("|||")
+        term, defi = term.strip().strip('`*').strip(), defi.strip()
+        if term and term.lower() not in seen:
+            seen.add(term.lower())
+            terms.append({"term": term, "definition": defi, "aliases": []})
+    return terms
+
+
 def _split_by_budget(text: str, budget: int) -> list[str]:
     lines = text.splitlines(keepends=True)
     out, buf = [], ""

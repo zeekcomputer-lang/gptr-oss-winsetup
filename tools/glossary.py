@@ -22,6 +22,7 @@ stdlib only — vendor/gpt_researcher 불요.
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 # repo 루트(= tools/ 의 상위). data 하위 용어사전 경로 계산용.
@@ -197,6 +198,49 @@ def info(explicit: str | None = None) -> dict:
         "bytes": len(block.encode("utf-8")),
         "sample": [t["term"] for t in terms[:10]],
     }
+
+
+# ──────────────────────────────────────────────────
+#  산출물 말미 용어집(표) 부록 — chrono 최종 보고서용
+# ──────────────────────────────────────────────────
+def _appears(name: str, text: str) -> bool:
+    """용어(또는 별칭)가 본문에 등장하는가. 영숫자 용어는 단어경계, 한글등은 부분일치."""
+    if not name:
+        return False
+    if re.fullmatch(r'[A-Za-z0-9 .+\-/]+', name):
+        return re.search(r'(?<![A-Za-z0-9])' + re.escape(name) + r'(?![A-Za-z0-9])',
+                         text, re.IGNORECASE) is not None
+    return name in text
+
+
+def find_used_terms(text: str, terms: list[dict]) -> list[dict]:
+    """본문(text)에 용어 또는 별칭이 실제 등장한 항목만 추린다(원순서 유지)."""
+    used = []
+    for t in terms:
+        names = [t.get("term", "")] + list(t.get("aliases", []) or [])
+        if any(_appears(n, text) for n in names):
+            used.append(t)
+    return used
+
+
+def render_glossary_table(terms: list[dict], title: str = "용어집") -> str:
+    """사용된 용어 목록 → 마크다운 표 부록(용어|정의|출처). 비면 빈 문자열."""
+    if not terms:
+        return ""
+    def esc(s: str) -> str:
+        return (s or "").replace("|", "\\|").replace("\n", " ").strip()
+    out = [f"\n\n## {title}\n",
+           "| 용어 | 정의 | 출처 |",
+           "|------|------|------|"]
+    for t in terms:
+        term = esc(t.get("term", ""))
+        aliases = t.get("aliases") or []
+        if aliases:
+            term += f" ({esc(', '.join(aliases))})"
+        defi = esc(t.get("definition", "")) or "(정의 미기재)"
+        src = esc(t.get("source", "사전"))
+        out.append(f"| {term} | {defi} | {src} |")
+    return "\n".join(out) + "\n"
 
 
 def main() -> int:

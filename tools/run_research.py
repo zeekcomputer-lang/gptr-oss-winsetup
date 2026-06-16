@@ -210,6 +210,9 @@ def main() -> int:
         print(f"[run_research][ERROR] 리서치 실패: {type(e).__name__}: {e}", file=sys.stderr)
         return 1
 
+    # chrono 후처리: 사용된 고유명 → 말미 용어집(표) 부록 추가(사전+문서유래)
+    report = _maybe_append_glossary(report, args.mode)
+
     out_path.write_text(report, encoding="utf-8")
     print(f"[run_research] 완료 → {out_path}")
     print(f"[run_research] 보고서 길이: {len(report)} chars")
@@ -220,6 +223,73 @@ def main() -> int:
         if rc != 0:
             print("[run_research][WARN] DOCX 내보내기 실패(마크다운 보고서는 정상 저장됨)")
     return 0
+
+
+def _truthy(v, default: bool = False) -> bool:
+    if v is None:
+        return default
+    return str(v).strip().lower() in ("1", "true", "yes", "on")
+
+
+def _maybe_append_glossary(report: str, mode: str) -> str:
+    """chrono 최종 보고서 말미에 '용어집' 표 부록을 추가한다.
+
+    - 대상: 보고서에 실제 등장한 용어(사전 항목 + 문서에서 추출된 정의)만.
+    - 출처 구분: 초기 용어사전='사전', 다이제스트에서 자동 추출='문서'.
+    - chrono 모드 전용. GPTR_GLOSSARY_APPENDIX=0 으로 비활성 가능(기본 ON).
+    - 비치명: 어떤 단계에서 실패해도 원본 보고서를 그대로 반환.
+    """
+    if mode != "chrono" or not _truthy(os.getenv("GPTR_GLOSSARY_APPENDIX"), default=True):
+        return report
+    tools_dir = ROOT / "tools"
+    if str(tools_dir) not in sys.path:
+        sys.path.insert(0, str(tools_dir))
+    try:
+        import glossary as gl  # noqa: E402
+    except Exception as e:
+        print(f"[run_research][WARN] 용어집 모듈 로드 실패(건너뜀): {e}")
+        return report
+
+    # 1) 초기 용어사전(파일) 항목
+    try:
+        initial, _ = gl.load_terms(gl.resolve_sources())
+    except Exception as e:
+        print(f"[run_research][WARN] 용어사전 로드 실패: {e}")
+        initial = []
+    for t in initial:
+        t.setdefault("source", "사전")
+    seen = {t["term"].lower() for t in initial}
+    merged = list(initial)
+
+    # 2) 다이제스트에서 정의 명확한 고유명 자동 추출(초기 용어집에 없더라도)
+    digest_path = ROOT / "data" / "digest" / "digest.md"
+    if digest_path.exists():
+        try:
+            import build_digest as bd  # noqa: E402
+            auto = bd.extract_definitions(
+                digest_path.read_text(encoding="utf-8", errors="replace"),
+                known_terms=[t["term"] for t in initial],
+            )
+            for a in auto:
+                if a["term"].lower() not in seen:
+                    a["source"] = "문서"
+                    merged.append(a)
+                    seen.add(a["term"].lower())
+            if auto:
+                print(f"[run_research] 문서 유래 용어 추출: {len(auto)}건")
+        except Exception as e:
+            print(f"[run_research][WARN] 문서 용어 추출 실패(건너뜀): {type(e).__name__}: {e}")
+
+    if not merged:
+        return report
+    used = gl.find_used_terms(report, merged)
+    if not used:
+        print("[run_research] 용어집: 보고서에 등장한 용어 없음 — 부록 생략")
+        return report
+    table = gl.render_glossary_table(used)
+    n_doc = sum(1 for t in used if t.get("source") == "문서")
+    print(f"[run_research] 용어집 부록 추가: {len(used)}건(사전 {len(used) - n_doc} / 문서 {n_doc})")
+    return report.rstrip() + table
 
 
 def _export_docx(report: str, md_path: Path) -> int:
