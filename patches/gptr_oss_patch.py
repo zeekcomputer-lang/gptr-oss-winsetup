@@ -34,9 +34,9 @@ gptr_oss_patch — GPT-Researcher × GPT-OSS 런타임 패치 (monkeypatch, repo
                            - LLM 과 분리. 헤더 주입 없음(요구사항).
   EMBEDDING_API_KEY        임베딩 SDK 필수값 충족용 (기본 'unused')
   GPTR_DISABLE_TOOLCALLING 1/true 면 supports_tools() → False 강제 (기본 1)
-  GPTR_GLOSSARY            용어사전(JSON) 경로. 설정 시 보고서 생성 프롬프트에 전문용어·고유명
-                           정의를 주입한다(없으면 data/glossary.json 자동탐지, 둘 다 없으면 no-op).
-  GPTR_GLOSSARY_MAX_KB     주입 블록 최대 크기(KB, 기본 8). 초과분은 잘라낸다.
+  (용어사전) 설정은 .env 가 아니라 **파일**로 한다 — `data/glossary.json` 또는 `data/glossary/*.json`
+                           이 있을 때만 보고서 프롬프트에 전문용어·고유명 정의를 주입한다(없으면 no-op).
+                           자세한 건 tools/glossary.py 참고.
 
 주의:
   - 이 모듈은 gpt_researcher 를 import 하기 전이나 후 아무 때나 apply() 가능.
@@ -523,7 +523,7 @@ def _patch_inject_glossary() -> None:
     """보고서 생성 프롬프트에 용어사전(전문용어·고유명 정의) 블록을 덧붙인다(RAG 모드).
 
     요약/보고서가 전문지식을 요구할 때, 사전에 주입한 정의를 LLM 이 일관되게 쓰도록 한다.
-    GPTR_GLOSSARY 또는 data/glossary.json 이 있을 때만 동작(없으면 no-op).
+    data/glossary.json (또는 data/glossary/*.json) 파일이 있을 때만 동작(없으면 no-op). .env 미사용.
     PromptFamily 의 generate_report_* 는 staticmethod → 래핑 후 staticmethod 로 재할당.
     주입 순서: 기본프롬프트 + [용어사전] (+ 이후 _patch_force_language 가 한국어지시 추가).
     """

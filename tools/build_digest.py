@@ -22,7 +22,7 @@ CLI:
 env:
   OPENAI_BASE_URL, OPENAI_API_KEY, OPENAI_EXTRA_HEADERS, SMART_LLM, SMART_TOKEN_LIMIT,
   TEMPERATURE, LLM_MAX_RPS, CHRONO_MAX_INPUT_KB(기본 25), LANGUAGE(기본 korean),
-  GPTR_GLOSSARY/GPTR_GLOSSARY_MAX_KB(선택: 용어사전 주입 — map/reduce system 프롬프트에 덧붙)
+  (용어사전은 .env 가 아니라 data/glossary.json 또는 data/glossary/*.json 파일로 주입 — map/reduce system 프롬프트에 덧붙)
 """
 from __future__ import annotations
 

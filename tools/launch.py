@@ -6,7 +6,7 @@ launch — 반복 실행 (가벼움)
   check-embedding [opts]       별도 운영 중인 BGE 임베딩 엔드포인트 호환성 점검
   tiktoken <status|install|verify>  SSL 차단 환경용 tiktoken 오프라인 캐시 설치/점검
   research "<질의>" [opts]     리서치 실행 → outputs/ 저장
-  glossary [--show]            용어사전(JSON) 점검/미리보기 (data/glossary.json 또는 GPTR_GLOSSARY)
+  glossary [--show]            용어사전 파일 점검/미리보기 (data/glossary.json 또는 data/glossary/*.json)
   docx "<a.md>" [..] [-o out]   마크다운 보고서 → 비즈니스 DOCX(표 지원) 변환
   doctor                       환경 점검 (venv/vendor/.env/엔드포인트)
 
@@ -148,8 +148,7 @@ def cmd_tiktoken(argv: list[str]) -> int:
 
 
 def cmd_glossary(argv: list[str]) -> int:
-    # 용어사전 점검/미리보기 (stdlib only, vendor 불요). .env 의 GPTR_GLOSSARY 반영.
-    _load_env_into_os()
+    # 용어사전 점검/미리보기 (stdlib only, vendor 불요). data 하위 파일 기반(존재 시에만).
     py = str(venv_python()) if venv_exists() else sys.executable
     return run([py, str(GLOSSARY), *argv], check=False)
 
@@ -191,12 +190,13 @@ def cmd_doctor(argv: list[str]) -> int:
     try:
         sys.path.insert(0, str(ROOT / "tools"))
         import glossary as _g  # noqa: E402
-        gpath = _g.resolve_path()
-        if gpath is None:
-            print("  glossary     : (none) — data/glossary.json 또는 GPTR_GLOSSARY 미설정")
+        srcs = _g.resolve_sources()
+        if not srcs:
+            print("  glossary     : (none) — data/glossary.json 또는 data/glossary/*.json 없음")
         else:
             meta = _g.info()
-            print(f"  glossary     : OK {meta['count']}개 용어 @ {meta['path']} ({meta['bytes']}B)")
+            where = srcs[0].name if len(srcs) == 1 else f"{len(srcs)}개 파일"
+            print(f"  glossary     : OK {meta['count']}개 용어 @ {where} ({meta['bytes']}B)")
     except Exception as e:
         print(f"  glossary     : WARN({type(e).__name__}: {e})")
     if base:
