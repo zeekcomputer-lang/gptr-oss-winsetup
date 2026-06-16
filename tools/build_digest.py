@@ -21,7 +21,8 @@ CLI:
   python tools/build_digest.py --doc-path data/docs --query "<주제>" --out data/digest/digest.md
 env:
   OPENAI_BASE_URL, OPENAI_API_KEY, OPENAI_EXTRA_HEADERS, SMART_LLM, SMART_TOKEN_LIMIT,
-  TEMPERATURE, LLM_MAX_RPS, CHRONO_MAX_INPUT_KB(기본 25), LANGUAGE(기본 korean)
+  TEMPERATURE, LLM_MAX_RPS, CHRONO_MAX_INPUT_KB(기본 25), LANGUAGE(기본 korean),
+  GPTR_GLOSSARY/GPTR_GLOSSARY_MAX_KB(선택: 용어사전 주입 — map/reduce system 프롬프트에 덧붙)
 """
 from __future__ import annotations
 
@@ -198,6 +199,24 @@ def _lang() -> str:
     return os.getenv("LANGUAGE", "korean")
 
 
+_GLOSSARY_CACHE: str | None = None
+
+
+def _glossary_block() -> str:
+    """용어사전(JSON) 주입 블록을 1회 로드해 캐시. 없으면 빈 문자열.
+    chrono map/reduce 의 system 프롬프트에 덧붙여 전문용어 정의를 일관 적용."""
+    global _GLOSSARY_CACHE
+    if _GLOSSARY_CACHE is None:
+        try:
+            sys.path.insert(0, str(Path(__file__).resolve().parent))
+            import glossary as _g  # noqa: E402
+            _GLOSSARY_CACHE = _g.get_block(verbose=True)
+        except Exception as e:
+            print(f"[digest][WARN] 용어사전 로드 실패(무시): {e}")
+            _GLOSSARY_CACHE = ""
+    return _GLOSSARY_CACHE
+
+
 _MAP_SYSTEM = (
     "너는 다수의 원본 문서에서 핵심 이벤트를 누락 없이 추출하는 분석가다. "
     "반드시 {lang} 로 작성한다. 추측/창작 금지, 원문 근거만 사용한다."
@@ -227,7 +246,7 @@ def _render_batch(batch: list[dict]) -> str:
 
 
 def map_batch(batch: list[dict], query: str) -> str:
-    sys_p = _MAP_SYSTEM.format(lang=_lang())
+    sys_p = _MAP_SYSTEM.format(lang=_lang()) + _glossary_block()
     usr_p = _MAP_USER_TMPL.format(lang=_lang(), query=query or "(미지정)", docs=_render_batch(batch))
     return LLM_CALL(sys_p, usr_p).strip()
 
@@ -261,7 +280,7 @@ def reduce_text(text: str, payload_budget: int, query: str, max_levels: int = 5)
         pieces = _split_by_budget(text, payload_budget - _PROMPT_OVERHEAD_BYTES)
         if len(pieces) <= 1:
             break
-        sys_p = _REDUCE_SYSTEM.format(lang=_lang())
+        sys_p = _REDUCE_SYSTEM.format(lang=_lang()) + _glossary_block()
         outs = []
         for pc in pieces:
             usr_p = _REDUCE_USER_TMPL.format(lang=_lang(), query=query or "(미지정)", chunks=pc)

@@ -1,0 +1,25 @@
+{
+  "instruction": "아래 용어사전 정의를 반드시 준수하라. 고유명사·전문용어·약어는 이 정의에 맞춰 일관되게 사용하고, 정의와 충돌하는 추측을 하지 않는다. 용어사전에 없는 내용은 원문 근거를 따른다.",
+  "terms": [
+    {
+      "term": "BGE",
+      "definition": "BAAI General Embedding. 텍스트를 벡터로 변환하는 임베딩 모델 계열. 본 시스템은 bge-m3-korean 변형을 OpenAI 호환 엔드포인트로 사용한다.",
+      "aliases": ["bge-m3", "bge-m3-korean"]
+    },
+    {
+      "term": "RAG",
+      "definition": "Retrieval-Augmented Generation. 질의와 유사한 문서 청크를 검색해 LLM 컨텍스트로 주입한 뒤 답을 생성하는 방식. 누락이 발생할 수 있다.",
+      "aliases": ["검색증강생성"]
+    },
+    {
+      "term": "GPT-OSS",
+      "definition": "사내/로컬에서 운영하는 OpenAI 호환 오픈소스 LLM 엔드포인트. strict function-calling/JSON mode 를 지원하지 않을 수 있어 프롬프트 기반으로 구동한다.",
+      "aliases": ["gpt-oss", "gpt-oss-120b"]
+    },
+    {
+      "term": "다이제스트",
+      "definition": "chrono 모드에서 전체 문서를 map-reduce 로 압축한 시간순 이벤트 요약본. 누락 0 을 코드로 보장하며 최종 보고서의 입력이 된다.",
+      "aliases": ["digest"]
+    }
+  ]
+}

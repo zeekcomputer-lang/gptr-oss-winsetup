@@ -34,6 +34,9 @@ gptr_oss_patch — GPT-Researcher × GPT-OSS 런타임 패치 (monkeypatch, repo
                            - LLM 과 분리. 헤더 주입 없음(요구사항).
   EMBEDDING_API_KEY        임베딩 SDK 필수값 충족용 (기본 'unused')
   GPTR_DISABLE_TOOLCALLING 1/true 면 supports_tools() → False 강제 (기본 1)
+  GPTR_GLOSSARY            용어사전(JSON) 경로. 설정 시 보고서 생성 프롬프트에 전문용어·고유명
+                           정의를 주입한다(없으면 data/glossary.json 자동탐지, 둘 다 없으면 no-op).
+  GPTR_GLOSSARY_MAX_KB     주입 블록 최대 크기(KB, 기본 8). 초과분은 잘라낸다.
 
 주의:
   - 이 모듈은 gpt_researcher 를 import 하기 전이나 후 아무 때나 apply() 가능.
@@ -503,6 +506,58 @@ _KOREAN_DIRECTIVE = (
 )
 
 
+def _get_glossary_block() -> str:
+    """tools/glossary 로 용어사전 주입 블록을 구성. 없으면 빈 문자열(비치명)."""
+    try:
+        tools_dir = os.path.join(_PATCH_ROOT, "tools")
+        if tools_dir not in sys.path:
+            sys.path.insert(0, tools_dir)
+        import glossary as _g  # type: ignore
+        return _g.get_block(verbose=True)
+    except Exception as e:  # pragma: no cover
+        print(f"[gptr_oss_patch][WARN] 용어사전 로딩 실패(무시하고 진행): {e}")
+        return ""
+
+
+def _patch_inject_glossary() -> None:
+    """보고서 생성 프롬프트에 용어사전(전문용어·고유명 정의) 블록을 덧붙인다(RAG 모드).
+
+    요약/보고서가 전문지식을 요구할 때, 사전에 주입한 정의를 LLM 이 일관되게 쓰도록 한다.
+    GPTR_GLOSSARY 또는 data/glossary.json 이 있을 때만 동작(없으면 no-op).
+    PromptFamily 의 generate_report_* 는 staticmethod → 래핑 후 staticmethod 로 재할당.
+    주입 순서: 기본프롬프트 + [용어사전] (+ 이후 _patch_force_language 가 한국어지시 추가).
+    """
+    block = _get_glossary_block()
+    if not block:
+        return
+    try:
+        from gpt_researcher.prompts import PromptFamily
+    except Exception as e:  # pragma: no cover
+        print(f"[gptr_oss_patch][WARN] PromptFamily(용어사전) 패치 건너뜀: {e}")
+        return
+    targets = ["generate_report_prompt", "generate_report_introduction",
+               "generate_report_conclusion", "generate_subtopic_report_prompt"]
+    patched = []
+    for name in targets:
+        fn = getattr(PromptFamily, name, None)
+        if fn is None or getattr(fn, "_oss_glossary_patched", False):
+            continue
+
+        def _make(orig, blk):
+            def _w(*args, **kwargs):
+                return f"{orig(*args, **kwargs)}{blk}"
+            _w._oss_glossary_patched = True
+            return _w
+
+        try:
+            setattr(PromptFamily, name, staticmethod(_make(fn, block)))
+            patched.append(name)
+        except Exception as e:  # pragma: no cover
+            print(f"[gptr_oss_patch][WARN] {name} 용어사전 주입 실패: {e}")
+    if patched:
+        print(f"[gptr_oss_patch] 용어사전 주입 적용: {patched}")
+
+
 def _patch_force_language() -> None:
     """보고서 생성 프롬프트에 강한 한국어 지시문을 덧붙여 gpt-oss 언어 이탈 방지(하드닝).
 
@@ -559,7 +614,8 @@ def apply() -> None:
     _patch_embedding_base_url()
     _patch_disable_toolcalling()
     _patch_choose_agent_fallback()
-    for _fn in (_patch_context_retrieval, _patch_full_corpus_plan, _patch_force_language):
+    for _fn in (_patch_context_retrieval, _patch_full_corpus_plan,
+                _patch_inject_glossary, _patch_force_language):
         try:
             _fn()
         except Exception as _e:  # pragma: no cover

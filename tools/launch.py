@@ -6,6 +6,7 @@ launch — 반복 실행 (가벼움)
   check-embedding [opts]       별도 운영 중인 BGE 임베딩 엔드포인트 호환성 점검
   tiktoken <status|install|verify>  SSL 차단 환경용 tiktoken 오프라인 캐시 설치/점검
   research "<질의>" [opts]     리서치 실행 → outputs/ 저장
+  glossary [--show]            용어사전(JSON) 점검/미리보기 (data/glossary.json 또는 GPTR_GLOSSARY)
   doctor                       환경 점검 (venv/vendor/.env/엔드포인트)
 
   ※ 임베딩(BGE) 서버는 이 repo 가 구동하지 않는다. 사용자가 별도로 띄운
@@ -36,6 +37,7 @@ from _common import (  # noqa: E402
 RUN_RESEARCH = ROOT / "tools" / "run_research.py"
 PREPARE_DATA = ROOT / "tools" / "prepare_data.py"
 CHECK_EMBEDDING = ROOT / "tools" / "check_embedding.py"
+GLOSSARY = ROOT / "tools" / "glossary.py"
 TIKTOKEN_OFFLINE = ROOT / "tools" / "tiktoken_offline.py"
 BUILD_DIGEST = ROOT / "tools" / "build_digest.py"
 
@@ -143,6 +145,13 @@ def cmd_tiktoken(argv: list[str]) -> int:
     return run([py, str(TIKTOKEN_OFFLINE), *argv], check=False)
 
 
+def cmd_glossary(argv: list[str]) -> int:
+    # 용어사전 점검/미리보기 (stdlib only, vendor 불요). .env 의 GPTR_GLOSSARY 반영.
+    _load_env_into_os()
+    py = str(venv_python()) if venv_exists() else sys.executable
+    return run([py, str(GLOSSARY), *argv], check=False)
+
+
 def cmd_doctor(argv: list[str]) -> int:
     _load_env_into_os()
     print("[doctor] 환경 점검")
@@ -167,6 +176,18 @@ def cmd_doctor(argv: list[str]) -> int:
     print(f"  MCP_STRATEGY       = {os.getenv('MCP_STRATEGY', '(unset)')}")
     hdr = os.getenv("OPENAI_EXTRA_HEADERS")
     print(f"  OPENAI_EXTRA_HEADERS = {'set' if hdr else '(none)'}")
+    # 용어사전 상태
+    try:
+        sys.path.insert(0, str(ROOT / "tools"))
+        import glossary as _g  # noqa: E402
+        gpath = _g.resolve_path()
+        if gpath is None:
+            print("  glossary     : (none) — data/glossary.json 또는 GPTR_GLOSSARY 미설정")
+        else:
+            meta = _g.info()
+            print(f"  glossary     : OK {meta['count']}개 용어 @ {meta['path']} ({meta['bytes']}B)")
+    except Exception as e:
+        print(f"  glossary     : WARN({type(e).__name__}: {e})")
     if base:
         print(f"  LLM   /v1/models   : {_probe(base.rstrip('/') + '/models')}")
     if emb:
@@ -203,12 +224,12 @@ def _doctor_runtime_tiktoken() -> None:
 
 _CMDS = {"prepare": cmd_prepare, "research": cmd_research, "digest": cmd_digest,
          "check-embedding": cmd_embed_check, "tiktoken": cmd_tiktoken,
-         "doctor": cmd_doctor}
+         "glossary": cmd_glossary, "doctor": cmd_doctor}
 
 
 def main() -> int:
     if len(sys.argv) < 2 or sys.argv[1] not in _CMDS:
-        print("사용법: python tools/launch.py [prepare|digest|check-embedding|tiktoken|research|doctor] ...")
+        print("사용법: python tools/launch.py [prepare|digest|check-embedding|tiktoken|research|glossary|doctor] ...")
         return 2
     return _CMDS[sys.argv[1]](sys.argv[2:])
 
