@@ -146,7 +146,11 @@ def _ensure_offline_resources() -> None:
     값은 이미 환경에 있으면 존중(setdefault).
     """
     if os.path.isdir(_TIKTOKEN_CACHE):
-        os.environ.setdefault("TIKTOKEN_CACHE_DIR", _TIKTOKEN_CACHE)
+        cur = os.environ.get("TIKTOKEN_CACHE_DIR")
+        # tiktoken 은 TIKTOKEN_CACHE_DIR=""(빈문자열)을 "캐싱 비활성=항상 네트워크"로 해석한다.
+        # 미설정/빈값이면 우리 오프라인 캐시로 강제. (유효한 사용자 지정 경로는 존중)
+        if not cur or not cur.strip():
+            os.environ["TIKTOKEN_CACHE_DIR"] = _TIKTOKEN_CACHE
     if os.path.isdir(_NLTK_DATA):
         prev = os.environ.get("NLTK_DATA", "")
         if _NLTK_DATA not in prev.split(os.pathsep):
@@ -420,10 +424,19 @@ def apply() -> None:
     print("[gptr_oss_patch] 적용 완료.")
 
 
+# ★ 오프라인 리소스 env(TIKTOKEN_CACHE_DIR/NLTK_DATA)는 gpt_researcher import 성공 여부와
+#   무관하게 "import 즉시" 적용한다. (apply() 가 gpt_researcher 미설치/내부변경 등으로
+#   실패해도 tiktoken 이 먼저 네트워크를 타며 SSL 실패하는 것을 막는다.)
+try:
+    _ensure_offline_resources()
+except Exception as e:  # pragma: no cover
+    print(f"[gptr_oss_patch][WARN] 오프라인 리소스 env 설정 실패: {e}")
+
 # import 시 자동 적용(편의). 비활성화하려면 GPTR_OSS_PATCH_AUTOAPPLY=0
 if _truthy(os.getenv("GPTR_OSS_PATCH_AUTOAPPLY"), default=True):
     try:
         apply()
     except Exception:
         # import-time 실패는 조용히 넘기고, 명시 apply() 시 재시도하게 둔다.
+        # (단, 위에서 오프라인 env 는 이미 적용됨)
         _APPLIED = False

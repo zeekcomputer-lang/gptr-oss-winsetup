@@ -38,6 +38,21 @@ if _VENDOR.exists():
 DEFAULT_DOC_PATH = ROOT / "data" / "docs"
 
 
+def _apply_offline_env() -> None:
+    """오프라인 캐시 env 를 gpt_researcher import 전에 직접 설정(패치와 독립, belt-and-suspenders).
+    tiktoken 은 빈 TIKTOKEN_CACHE_DIR("")를 캐싱 비활성으로 해석하므로 미설정/빈값이면 교체."""
+    tk = ROOT / "offline" / "tiktoken_cache"
+    nl = ROOT / "offline" / "nltk_data"
+    if tk.is_dir():
+        cur = os.environ.get("TIKTOKEN_CACHE_DIR")
+        if not cur or not cur.strip():
+            os.environ["TIKTOKEN_CACHE_DIR"] = str(tk)
+    if nl.is_dir():
+        prev = os.environ.get("NLTK_DATA", "")
+        if str(nl) not in prev.split(os.pathsep):
+            os.environ["NLTK_DATA"] = (prev + os.pathsep + str(nl)) if prev else str(nl)
+
+
 def _load_dotenv() -> None:
     """간단 .env 로더 (python-dotenv 없이도 동작). 기존 환경변수 우선."""
     env_path = ROOT / ".env"
@@ -57,6 +72,8 @@ def _load_dotenv() -> None:
 
 async def _run(query: str, report_type: str, tone_name: str, verbose: bool,
                report_source: str) -> str:
+    # 오프라인 캐시 env 를 gpt_researcher 터치 전에 확실히 설정(패치 import 실패에도 대비)
+    _apply_offline_env()
     # 패치는 gpt_researcher import 전에 import 되어도 되고 후에도 됨(멱등)
     import gptr_oss_patch  # noqa: F401  (import 시 자동 apply)
 

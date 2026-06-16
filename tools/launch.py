@@ -164,7 +164,33 @@ def cmd_doctor(argv: list[str]) -> int:
     if emb:
         # /health 가 없는 서버(사용자 BGE 등)도 있으므로 실제 임베딩 POST 로 점검
         print(f"  BGE   /v1/embeddings: {_probe_embeddings(emb)}")
+    _doctor_runtime_tiktoken()
     return 0
+
+
+def _doctor_runtime_tiktoken() -> None:
+    """실제 런타임(패치 import 이후) TIKTOKEN_CACHE_DIR 이 설정되는지 venv 에서 직접 확인.
+
+    run_research 와 동일하게 patches 를 path 에 넣고 gptr_oss_patch 를 import 한 뒤
+    os.environ['TIKTOKEN_CACHE_DIR'] 결과값과 기대 해시파일 존재를 출력한다.
+    (“파일은 있는데 런타임 env 가 안 잡힌다” 증상을 직접 진단)
+    """
+    if not venv_exists():
+        return
+    patches_dir = ROOT / "patches"
+    probe = (
+        "import os, sys; sys.path.insert(0, r'%s');"
+        "os.environ['GPTR_OSS_PATCH_AUTOAPPLY']='0';"  # gpt_researcher 미설치여도 env 만 확인
+        "import gptr_oss_patch as g;"
+        "tk=os.environ.get('TIKTOKEN_CACHE_DIR');"
+        "print('  [runtime] TIKTOKEN_CACHE_DIR =', tk or '(unset)');"
+        "print('  [runtime] NLTK_DATA          =', os.environ.get('NLTK_DATA') or '(unset)');"
+        "present=[f for f in (os.listdir(tk) if tk and os.path.isdir(tk) else [])];"
+        "print('  [runtime] 캐시 파일 수     =', len(present))"
+        % str(patches_dir)
+    )
+    print("  ── 런타임 오프라인 env (패치 import 후) ──")
+    run([str(venv_python()), "-c", probe], check=False)
 
 
 _CMDS = {"prepare": cmd_prepare, "research": cmd_research,

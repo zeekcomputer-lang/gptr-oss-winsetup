@@ -376,6 +376,7 @@ ls -t outputs/ | head; cat "outputs/$(ls -t outputs | head -1)"
 | 셋업 중 `numpy ... C/C++ 컴파일러`/`vswhere.exe not found` | Python 3.14 에서 numpy 상한핀(`<2.3.0`)이 cp314 휠 없는 범위라 소스빌드 시도 | **최신 setup 으로 재실행**(자동 해결: numpy 상한 완화+휠 우선). 컴파일러 설치 불필. 자세한 건 부록 D |
 | `tiktoken`/`nltk_data` 다운로드 실패, 프록시/타임아웃 | 런타임에 외부 리소스 자동 다운로드(에어갭 차단) | **온라인 환경에서 `python tools/setup.py` 1회**(4/6 단계 프로비저닝) → `offline/` 적재. `doctor` 로 `offline res: OK` 확인. 부록 E |
 | tiktoken 다운로드가 **SSL로 차단**(openaipublic.blob) | 사내망 SSL 검사/차단 | 허용 PC에서 BPE 블록 수동 다운 → `tiktoken status`(URL확인) → `tiktoken install <파일>` → `tiktoken verify`(SSL 미접속 입증). 부록 E |
+| 캐시 파일은 있는데 **런타임에 TIKTOKEN_CACHE_DIR 가 안 잡힘** | (구판) env 가 apply() 내부에서만 설정됨 / `.env` 의 빈 `TIKTOKEN_CACHE_DIR=` | 최신 버전은 import 즉시 설정+빈값 교정으로 해결. `python tools/launch.py doctor` 의 `[runtime] TIKTOKEN_CACHE_DIR` 행으로 실측값 확인. (파일명=sha1(URL)은 상수) |
 | `Resource 'punkt_tab' not found` | `.md` 로더(UnstructuredMarkdownLoader)가 NLTK 문장분할 사용 | **`prepare --format txt`(기본)** → TextLoader 경로로 NLTK 미경유. .md 유지 시 setup 프로비저닝으로 punkt_tab 확보. 부록 E |
 | `json_repair ... 'NoneType' object is not subscriptable` | gpt-oss 가 JSON 미준수 → 빈/None 응답 | `GPTR_AGENT_JSON_FALLBACK=1`(기본) → 패치가 기본 에이전트로 폴백(비치명). 보고서 품질을 위해 SMART_LLM 을 더 큰 모델로. 부록 E |
 | 문서 로드 실패 / 작업 취소 연쇄 | 위 리소스 예외가 async 단계에 전파 | 위 세 행 해소 적용. local 은 `--format txt` 가 가장 안전(부록 E) |
