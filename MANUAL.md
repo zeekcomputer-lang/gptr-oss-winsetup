@@ -375,6 +375,7 @@ ls -t outputs/ | head; cat "outputs/$(ls -t outputs | head -1)"
 | jsonl 파싱 skip 로그 | 깨진 줄(중간 줄바꿈 등) | 해당 줄 수정. 변환기는 깨진 줄만 건너뛰고 계속 진행 |
 | 셋업 중 `numpy ... C/C++ 컴파일러`/`vswhere.exe not found` | Python 3.14 에서 numpy 상한핀(`<2.3.0`)이 cp314 휠 없는 범위라 소스빌드 시도 | **최신 setup 으로 재실행**(자동 해결: numpy 상한 완화+휠 우선). 컴파일러 설치 불필. 자세한 건 부록 D |
 | `tiktoken`/`nltk_data` 다운로드 실패, 프록시/타임아웃 | 런타임에 외부 리소스 자동 다운로드(에어갭 차단) | **온라인 환경에서 `python tools/setup.py` 1회**(4/6 단계 프로비저닝) → `offline/` 적재. `doctor` 로 `offline res: OK` 확인. 부록 E |
+| tiktoken 다운로드가 **SSL로 차단**(openaipublic.blob) | 사내망 SSL 검사/차단 | 허용 PC에서 BPE 블록 수동 다운 → `tiktoken status`(URL확인) → `tiktoken install <파일>` → `tiktoken verify`(SSL 미접속 입증). 부록 E |
 | `Resource 'punkt_tab' not found` | `.md` 로더(UnstructuredMarkdownLoader)가 NLTK 문장분할 사용 | **`prepare --format txt`(기본)** → TextLoader 경로로 NLTK 미경유. .md 유지 시 setup 프로비저닝으로 punkt_tab 확보. 부록 E |
 | `json_repair ... 'NoneType' object is not subscriptable` | gpt-oss 가 JSON 미준수 → 빈/None 응답 | `GPTR_AGENT_JSON_FALLBACK=1`(기본) → 패치가 기본 에이전트로 폴백(비치명). 보고서 품질을 위해 SMART_LLM 을 더 큰 모델로. 부록 E |
 | 문서 로드 실패 / 작업 취소 연쇄 | 위 리소스 예외가 async 단계에 전파 | 위 세 행 해소 적용. local 은 `--format txt` 가 가장 안전(부록 E) |
@@ -591,6 +592,35 @@ python tools/launch.py doctor       # offline res: tiktoken_cache=OK, nltk_data=
 python tools/launch.py research "우리 데이터 핵심 요약" --source local
 ```
 
+### tiktoken 이 SSL 로 막힌 경우 — 수동 다운로드 → 직접 사용
+
+사내망이 `openaipublic.blob.core.windows.net` 을 SSL 로 차단하면 setup 의 자동
+선다운로드도 실패한다. 이 때는 BPE 블록을 **허용된 PC/우회로에서 수동으로**
+받아 캐시에 직접 넣는다. tiktoken 은 `TIKTOKEN_CACHE_DIR/<sha1(URL)>` 파일이 있고
+내용 sha256 이 일치하면 **네트워크를 아예 타지 않는다**(SSL 시도 자체가 없음).
+
+```bash
+# 1) 받아야 할 URL 확인 (각 인코딩의 정확한 다운로드 주소를 출력)
+python tools/launch.py tiktoken status
+#   → o200k_base : https://openaipublic.blob.core.windows.net/encodings/o200k_base.tiktoken
+#   → cl100k_base: https://openaipublic.blob.core.windows.net/encodings/cl100k_base.tiktoken
+
+# 2) 위 두 파일을 허용 PC에서 받아 온다(파일명 자유). 그다음 설치:
+python tools/launch.py tiktoken install o200k_base.tiktoken cl100k_base.tiktoken
+#   - 설치 전 sha256 무결성 검증(틀린 파일은 거부). 파일명이 모호하면 내용으로 자동판별.
+#   - 인코딩을 명시하려면:  --as o200k_base  /  --as cl100k_base
+#   - (대안) 원본을 offline/manual/ 에 둔 뒤 `python tools/setup.py` → 자동 편입
+
+# 3) SSL 미접속 검증 — 네트워크를 강제 차단한 채 로드되는지 확인
+python tools/launch.py tiktoken verify
+#   → "검증 통과: SSL 연결 없이 동작 보장" 이면 끝.
+```
+
+파일명은 캐시 내부에서 `sha1(URL)` 로 자동 변환되므로 손으로 해시명을 만들 필요가 없다.
+URL·해시명·무결성값은 설치된 tiktoken 소스(`tiktoken_ext.openai_public`)에서 직접 읽으므로
+tiktoken 버전이 바뀌어도 정확히 맞는다. (선택) `.env` 에 `TIKTOKEN_CACHE_DIR`·
+`TIKTOKEN_ENCODINGS`·`TIKTOKEN_SHA1_<ENC>` 로 직접 지정도 가능(보통 불필요).
+
 ### 에어갭 머신이 setup 머신과 다를 때
 `offline/` 폴더(=tiktoken_cache + nltk_data)를 `.venv`/`vendor` 와 함께 대상 머신으로
 복사해 옮긴다. 패치가 repo 루트의 `offline/` 를 자동 인식한다.
@@ -599,5 +629,8 @@ python tools/launch.py research "우리 데이터 핵심 요약" --source local
 - 불량 프록시(`HTTPS_PROXY=http://127.0.0.1:9`, 사실상 네트워크 차단) 상태에서
   `TIKTOKEN_CACHE_DIR`/`NLTK_DATA` 만으로 `tiktoken.encode` 와 NLTK `sent_tokenize`
   **정상 동작** 확인 → 런타임 네트워크 불요 입증.
+- **tiktoken 수동 설치 워크플로(실측)**: 수동 원본 `install` → `status` OK(sha256 일치) →
+  `verify` 통과(**socket 강제 차단** 상태에서 o200k/cl100k/text-embedding-3-small 로드 성공).
+  손상 파일은 sha256 불일치로 거부, 파일명이 모호해도 내용 sha256 로 자동판별 확인.
 - prepare `--format txt` 더미 코퍼스 변환 OK. 전체 `py_compile` 통과.
 - 미수행: 실제 gpt-oss+BGE E2E 완주(사용자 환경 예정).

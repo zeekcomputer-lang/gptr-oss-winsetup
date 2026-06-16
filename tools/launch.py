@@ -2,8 +2,9 @@
 launch — 반복 실행 (가벼움)
 
 서브커맨드:
-  prepare "<입력>" [opts]      로컬 데이터(jsonl/csv/json) → data/docs(.md) 변환
+  prepare "<입력>" [opts]      로컬 데이터(jsonl/csv/json) → data/docs(.txt/.md) 변환
   check-embedding [opts]       별도 운영 중인 BGE 임베딩 엔드포인트 호환성 점검
+  tiktoken <status|install|verify>  SSL 차단 환경용 tiktoken 오프라인 캐시 설치/점검
   research "<질의>" [opts]     리서치 실행 → outputs/ 저장
   doctor                       환경 점검 (venv/vendor/.env/엔드포인트)
 
@@ -35,6 +36,7 @@ from _common import (  # noqa: E402
 RUN_RESEARCH = ROOT / "tools" / "run_research.py"
 PREPARE_DATA = ROOT / "tools" / "prepare_data.py"
 CHECK_EMBEDDING = ROOT / "tools" / "check_embedding.py"
+TIKTOKEN_OFFLINE = ROOT / "tools" / "tiktoken_offline.py"
 
 
 def _ensure_setup() -> None:
@@ -123,6 +125,16 @@ def cmd_embed_check(argv: list[str]) -> int:
     return run([py, str(CHECK_EMBEDDING), *argv], check=False)
 
 
+def cmd_tiktoken(argv: list[str]) -> int:
+    # tiktoken 오프라인 캐시 설치/점검 (tiktoken 필요 → venv python 우선)
+    _load_env_into_os()  # TIKTOKEN_CACHE_DIR/ENCODINGS 등 .env 반영
+    if not argv:
+        print('[launch] 사용법: tiktoken <status|install|verify> [opts]')
+        return 2
+    py = str(venv_python()) if venv_exists() else sys.executable
+    return run([py, str(TIKTOKEN_OFFLINE), *argv], check=False)
+
+
 def cmd_doctor(argv: list[str]) -> int:
     _load_env_into_os()
     print("[doctor] 환경 점검")
@@ -156,12 +168,13 @@ def cmd_doctor(argv: list[str]) -> int:
 
 
 _CMDS = {"prepare": cmd_prepare, "research": cmd_research,
-         "check-embedding": cmd_embed_check, "doctor": cmd_doctor}
+         "check-embedding": cmd_embed_check, "tiktoken": cmd_tiktoken,
+         "doctor": cmd_doctor}
 
 
 def main() -> int:
     if len(sys.argv) < 2 or sys.argv[1] not in _CMDS:
-        print("사용법: python tools/launch.py [prepare|check-embedding|research|doctor] ...")
+        print("사용법: python tools/launch.py [prepare|check-embedding|tiktoken|research|doctor] ...")
         return 2
     return _CMDS[sys.argv[1]](sys.argv[2:])
 

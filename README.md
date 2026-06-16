@@ -24,9 +24,10 @@ gptr-oss-winsetup/
 ├─ tools/
 │  ├─ _common.py               # 공유 유틸 (경로/venv/플랫폼/데이터 경로)
 │  ├─ setup.py                 # 1회성 셋업 (venv + vendoring + 의존성 + .env + data/)
-│  ├─ launch.py                # 반복 실행 (prepare / check-embedding / research / doctor)
+│  ├─ launch.py                # 반복 실행 (prepare / check-embedding / tiktoken / research / doctor)
 │  ├─ prepare_data.py          # jsonl/csv/json → data/docs/*.txt(기본)·.md 변환기 (로컬 데이터)
 │  ├─ check_embedding.py       # 별도 운영 BGE 엔드포인트 연결/호환성 점검 (stdlib)
+│  ├─ tiktoken_offline.py      # SSL 차단 환경용 tiktoken 캐시 설치/검증 (status/install/verify)
 │  └─ run_research.py          # 리서치 엔트리포인트 (--source web|local|hybrid)
 ├─ examples/sample-corpus.jsonl # 로컬 데이터 형식 예제(3건)
 ├─ data/                       # raw/(원본) + docs/(변환본=DOC_PATH). git 제외
@@ -56,6 +57,9 @@ windows\doctor.bat
 ```
 
 POSIX(WSL/Linux/macOS)에서는 동일하게 `python tools/setup.py`, `python tools/launch.py check-embedding`, `python tools/launch.py research "..."`.
+
+> 🔒 **tiktoken 이 SSL로 막힌 사내망**: BPE 블록을 수동으로 받아 직접 설치·검증 —
+> `tiktoken status`(다운로드 URL 확인) → `tiktoken install <파일>` → `tiktoken verify`(SSL 미접속 입증). 상세는 MANUAL 부록 E.
 
 > ⚠ 임베딩(BGE) 서버는 이 repo 가 구동하지 않는다. 사용자가 OpenAI 호환 `/v1/embeddings`
 > 엔드포인트를 별도로 띄우고, `.env` 의 `EMBEDDING_BASE_URL` 로 그 주소를 가리킨다.

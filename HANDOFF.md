@@ -100,3 +100,17 @@ Windows: `setup.bat / check-embedding.bat / prepare-data.bat / research-local.ba
 핵심 환경변수(.env): `GPTR_OFFLINE=1`(HF/transformers 네트워크 차단), `GPTR_AGENT_JSON_FALLBACK=1`(기본 ON). tiktoken/NLTK 경로는 패치가 `offline/` 로 자동 설정(직접 지정 불요).
 
 구현 위치: `tools/setup.py:provision_offline()`(4/6 단계) · `patches/gptr_oss_patch.py:_ensure_offline_resources()/_patch_choose_agent_fallback()` · `tools/prepare_data.py --format` · `tools/_common.py` OFFLINE 경로. `python tools/launch.py doctor` 가 `offline res` 상태(tiktoken_cache/nltk_data OK 여부) 표시.
+
+### §8-1. tiktoken 이 SSL 로 막힌 경우 (수동 다운로드 → 직접 사용)
+
+setup 의 자동 선다운로드도 openaipublic.blob 가 SSL 차단되면 실패한다. 이 때는 허용 PC에서 BPE 블록을 받아 직접 설치한다. tiktoken 은 `TIKTOKEN_CACHE_DIR/<sha1(URL)>` 파일이 있고 내용 sha256 이 일치하면 **절대 네트워크를 타지 않는다**(`tiktoken.load.read_file_cached` 실측 확인).
+
+전용 투울: **`tools/tiktoken_offline.py`** (`python tools/launch.py tiktoken <status|install|verify>`).
+- URL/sha1(캐시명)/expected sha256 는 모두 설치된 `tiktoken_ext.openai_public` 소스에서 **직접 추출** → tiktoken 버전이 달라져도 정확히 일치(하드코딩 의존 없음).
+- `status`: 각 인코딩의 캐시 존재/무결성 + 다운로드 URL 출력.
+- `install <파일...>`: 수동 원본을 올바른 해시명으로 복사(설치 전 sha256 검증; 불일치 면 거부). 인코딩 판별 우선순위=`--as` > 파일명 > 내용 sha256.
+- `verify`: socket 을 강제 차단한 채 로드 → 네트워크 시도 시 즉시 예외. 성공=SSL 미접속 입증.
+- 자동화: 원본을 `offline/manual/*.tiktoken` 에 두면 `setup.py provision_offline()` 가 자동 install.
+- (선택) `.env`: `TIKTOKEN_CACHE_DIR`/`TIKTOKEN_ENCODINGS`/`TIKTOKEN_SHA1_<ENC>` 오버라이드.
+
+**실측**: 수동 원본 install → status OK(sha256 일치) → verify 통과(socket 차단 상태에서 o200k/cl100k/text-embedding-3-small 로드 성공). 손상 파일 거부 + 파일명 무관 내용기반 자동판별도 확인.

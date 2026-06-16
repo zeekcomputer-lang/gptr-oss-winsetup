@@ -142,7 +142,17 @@ def provision_offline() -> None:
     TIKTOKEN_CACHE_DIR.mkdir(parents=True, exist_ok=True)
     NLTK_DATA_DIR.mkdir(parents=True, exist_ok=True)
 
+    # 0) 수동 드롭 폴더(offline/manual/*.tiktoken)가 있으면 먼저 올바른 해시명으로 설치
+    #    (SSL 차단망: openaipublic 접근 불가 → 허용 PC에서 받은 원본을 여기 두면 자동 편입)
+    manual_dir = OFFLINE_DIR / "manual"
+    if manual_dir.is_dir():
+        drops = sorted(str(p) for p in manual_dir.glob("*.tiktoken"))
+        if drops:
+            print(f"  offline/manual 에서 수동 드롭 {len(drops)}건 발견 → 자동 설치 시도")
+            run([vpy, str(ROOT / "tools" / "tiktoken_offline.py"), "install", *drops], check=False)
+
     # 1) tiktoken BPE 블록 사전 캐시 — TIKTOKEN_CACHE_DIR 지정 후 encode 1회로 다운로드 유발
+    #    (온라인이면 성공, SSL 차단망이면 실패 → 수동 install 로 보완)
     tk_code = (
         "import os, tiktoken;"
         "os.environ['TIKTOKEN_CACHE_DIR']=r'%s';"
@@ -152,6 +162,9 @@ def provision_offline() -> None:
         % str(TIKTOKEN_CACHE_DIR)
     )
     rc_tk = run([vpy, "-c", tk_code], check=False)
+    # 온라인 다운로드가 실패해도 수동 설치분이 있으면 status 가 OK 일 수 있음 → 재판정
+    if rc_tk != 0:
+        rc_tk = run([vpy, str(ROOT / "tools" / "tiktoken_offline.py"), "status"], check=False)
 
     # 2) NLTK 데이터 사전 다운로드 → offline/nltk_data
     nltk_pkgs = ",".join(repr(p) for p in _NLTK_PACKAGES)
@@ -165,10 +178,15 @@ def provision_offline() -> None:
     rc_nltk = run([vpy, "-c", nltk_code], check=False)
 
     if rc_tk != 0 or rc_nltk != 0:
-        print("  [WARN] 오프라인 리소스 일부 미완료 — 오프라인 research 전 인터넷 가능 환경에서")
-        print("         'python tools/setup.py' 를 1회 재실행하거나, 아래를 수동 수행하세요:")
-        print(f"         tiktoken: TIKTOKEN_CACHE_DIR={TIKTOKEN_CACHE_DIR} 로 get_encoding 1회")
-        print(f"         nltk    : nltk.download({_NLTK_PACKAGES}, download_dir={NLTK_DATA_DIR})")
+        print("  [WARN] 오프라인 리소스 일부 미완료.")
+        if rc_tk != 0:
+            print("   • tiktoken (openaipublic SSL 차단 시): 허용 PC에서 원본을 받아 수동 설치하세요.")
+            print("     1) URL 확인:  python tools/launch.py tiktoken status   (각 인코딩 URL 출력)")
+            print("     2) 설치   :  python tools/launch.py tiktoken install o200k_base.tiktoken cl100k_base.tiktoken")
+            print("     3) 검증   :  python tools/launch.py tiktoken verify   (네트워크 차단 후 로드 입증)")
+        if rc_nltk != 0:
+            print(f"   • nltk : nltk.download({_NLTK_PACKAGES}, download_dir={NLTK_DATA_DIR})")
+            print("           또는 .md 대신 'prepare --format txt'(기본) 사용 → NLTK 미경유")
     else:
         print("  완료: tiktoken_cache + nltk_data 고정됨 (런타임 네트워크 불요)")
 
