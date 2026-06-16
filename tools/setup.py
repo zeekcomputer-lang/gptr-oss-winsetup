@@ -115,6 +115,8 @@ def pip_install() -> None:
     run([vpy, "-m", "pip", "install", "--prefer-binary", "duckduckgo-search"])
     # NLTK: unstructured 계열 로더(.md/.docx 등)가 문장분할에 사용. 명시 설치(오프라인 프로비저닝 대상).
     run([vpy, "-m", "pip", "install", "--prefer-binary", "nltk"], check=False)
+    # python-docx: 마크다운 보고서 → 비즈니스 DOCX(표 지원) 내보내기(tools/md_to_docx.py). 순수 파이썬 휠.
+    run([vpy, "-m", "pip", "install", "--prefer-binary", "python-docx"], check=False)
     # 임베딩 서버는 별도 운영 - torch/sentence-transformers 미설치.
     # cp314 휠이 없는 패키지가 있으면 --prefer-binary 가 휠 있는 버전을 선택한다.
 

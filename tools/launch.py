@@ -7,6 +7,7 @@ launch — 반복 실행 (가벼움)
   tiktoken <status|install|verify>  SSL 차단 환경용 tiktoken 오프라인 캐시 설치/점검
   research "<질의>" [opts]     리서치 실행 → outputs/ 저장
   glossary [--show]            용어사전(JSON) 점검/미리보기 (data/glossary.json 또는 GPTR_GLOSSARY)
+  docx "<a.md>" [..] [-o out]   마크다운 보고서 → 비즈니스 DOCX(표 지원) 변환
   doctor                       환경 점검 (venv/vendor/.env/엔드포인트)
 
   ※ 임베딩(BGE) 서버는 이 repo 가 구동하지 않는다. 사용자가 별도로 띄운
@@ -38,6 +39,7 @@ RUN_RESEARCH = ROOT / "tools" / "run_research.py"
 PREPARE_DATA = ROOT / "tools" / "prepare_data.py"
 CHECK_EMBEDDING = ROOT / "tools" / "check_embedding.py"
 GLOSSARY = ROOT / "tools" / "glossary.py"
+MD_TO_DOCX = ROOT / "tools" / "md_to_docx.py"
 TIKTOKEN_OFFLINE = ROOT / "tools" / "tiktoken_offline.py"
 BUILD_DIGEST = ROOT / "tools" / "build_digest.py"
 
@@ -152,6 +154,15 @@ def cmd_glossary(argv: list[str]) -> int:
     return run([py, str(GLOSSARY), *argv], check=False)
 
 
+def cmd_docx(argv: list[str]) -> int:
+    # 마크다운 보고서 → DOCX 변환 (python-docx 필요 → venv python 우선).
+    if not argv:
+        print('[launch] 사용법: docx "<입력.md>" [추가.md ...] [-o 출력.docx]')
+        return 2
+    py = str(venv_python()) if venv_exists() else sys.executable
+    return run([py, str(MD_TO_DOCX), *argv], check=False)
+
+
 def cmd_doctor(argv: list[str]) -> int:
     _load_env_into_os()
     print("[doctor] 환경 점검")
@@ -224,12 +235,12 @@ def _doctor_runtime_tiktoken() -> None:
 
 _CMDS = {"prepare": cmd_prepare, "research": cmd_research, "digest": cmd_digest,
          "check-embedding": cmd_embed_check, "tiktoken": cmd_tiktoken,
-         "glossary": cmd_glossary, "doctor": cmd_doctor}
+         "glossary": cmd_glossary, "docx": cmd_docx, "doctor": cmd_doctor}
 
 
 def main() -> int:
     if len(sys.argv) < 2 or sys.argv[1] not in _CMDS:
-        print("사용법: python tools/launch.py [prepare|digest|check-embedding|tiktoken|research|glossary|doctor] ...")
+        print("사용법: python tools/launch.py [prepare|digest|check-embedding|tiktoken|research|glossary|docx|doctor] ...")
         return 2
     return _CMDS[sys.argv[1]](sys.argv[2:])
 

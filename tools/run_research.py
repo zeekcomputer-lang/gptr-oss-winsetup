@@ -156,6 +156,9 @@ def main() -> int:
     ap.add_argument("--report-type", default="research_report")
     ap.add_argument("--tone", default="Objective")
     ap.add_argument("--out", default=None)
+    ap.add_argument("--docx", action="store_true",
+                    default=os.getenv("GPTR_EXPORT_DOCX", "false").lower() in ("1", "true", "yes", "on"),
+                    help="보고서를 비즈니스 DOCX(.docx, 표 지원)로도 내보낸다. env GPTR_EXPORT_DOCX 로도 설정.")
     ap.add_argument("--verbose", action="store_true",
                     default=os.getenv("VERBOSE", "false").lower() in ("1", "true", "yes", "on"))
     args = ap.parse_args()
@@ -210,6 +213,35 @@ def main() -> int:
     out_path.write_text(report, encoding="utf-8")
     print(f"[run_research] 완료 → {out_path}")
     print(f"[run_research] 보고서 길이: {len(report)} chars")
+
+    # 선택: 비즈니스 DOCX 내보내기(표 지원)
+    if args.docx:
+        rc = _export_docx(report, out_path)
+        if rc != 0:
+            print("[run_research][WARN] DOCX 내보내기 실패(마크다운 보고서는 정상 저장됨)")
+    return 0
+
+
+def _export_docx(report: str, md_path: Path) -> int:
+    """마크다운 보고서를 같은 경로의 .docx 로 내보낸다(비치명: 실패해도 md 는 유지)."""
+    tools_dir = ROOT / "tools"
+    if str(tools_dir) not in sys.path:
+        sys.path.insert(0, str(tools_dir))
+    try:
+        import md_to_docx as m2d  # noqa: E402
+    except SystemExit:
+        print("[run_research][WARN] python-docx 미설치 — DOCX 건너뜀(pip install python-docx 또는 setup 재실행)")
+        return 1
+    except Exception as e:
+        print(f"[run_research][WARN] md_to_docx 로드 실패: {e}")
+        return 1
+    docx_path = md_path.with_suffix(".docx")
+    try:
+        m2d.build_report_docx(report, docx_path)
+    except Exception as e:
+        print(f"[run_research][WARN] DOCX 생성 예외: {type(e).__name__}: {e}")
+        return 1
+    print(f"[run_research] DOCX 내보내기 완료 → {docx_path}")
     return 0
 
 
