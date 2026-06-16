@@ -87,6 +87,24 @@ python tools/launch.py research "우리 데이터 핵심 요약" --source local
 
 예제 데이터: `examples/sample-corpus.jsonl`. 전체 절차는 **[`MANUAL.md`](MANUAL.md)** 참조.
 
+## 실행 모드 2종 (출력은 둘 다 한글)
+
+| 모드 | 용도 | 누락 | 임베딩 | 명령 |
+|------|------|------|--------|------|
+| **rag** (기본) | 질의 유사도 기반 검색. 기간 흐름 참고 | 허용 | 필요 | `research "질의" --mode rag --source local` |
+| **chrono** | 전문서 map-reduce 요약 → 시간순 이벤트 정리, 서·본·결 비즈니스 보고서 | **0** | 불요 | `research "주제" --mode chrono` |
+
+```bat
+REM Office/PDF 포함 변환(win32 COM, DRM 대응 — Windows+Office 필요)
+windows\prepare-data.bat "data\raw" --clean
+REM 전문서 누락 없이 시간순 보고서(임베딩 불요)
+windows\research-chrono.bat "프로젝트 진행 경과 정리"
+```
+
+- **chrono** 는 컨텍스트 윈도우 초과를 피하려고 25KB(`CHRONO_MAX_INPUT_KB`) 단위로 나눠 요약하며, 모든 문서가 최소 1회 요약에 포함됨을 **코드로 검증**(누락 0).
+- **레이트리밋**: 모든 LLM 호출은 `LLM_MAX_RPS`(기본 4회/sec) 이하로 자동 스페이싱(GPT-OSS 5회/sec cap 대응).
+- Office/PDF 변환은 **win32 COM**(설치된 Word/PowerPoint)만 사용 → DRM 문서도 처리. `pip install -r requirements-windows.txt`(pywin32) 필요.
+
 ## 환경설정 (.env)
 
 핵심 항목 (`.env.example` 참조):

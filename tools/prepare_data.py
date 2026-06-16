@@ -57,8 +57,14 @@ from _common import DATA_RAW_DIR, DOCS_DIR, section  # noqa: E402
 _TITLE_CANDIDATES = ["title", "name", "headline", "subject", "heading"]
 _CONTENT_CANDIDATES = ["content", "text", "body", "abstract", "summary", "raw_content", "page_content"]
 _ID_CANDIDATES = ["id", "doc_id", "uid", "_id", "key"]
+_DATE_CANDIDATES = ["date", "timestamp", "datetime", "created", "created_at", "published", "published_at", "time"]
 
 _SAFE = re.compile(r"[^0-9A-Za-z가-힣._-]+")
+# 날짜 best-effort 추출 (YYYY-MM-DD / YYYYMMDD / YYYY.MM.DD 등). 강제 아님.
+_DATE_RE = re.compile(r"(20\d{2})[-_./]?(0[1-9]|1[0-2])[-_./]?(0[1-9]|[12]\d|3[01])")
+
+# win32 COM 변환 대상(Office/PDF). XML 직접 접근 금지 — win32_convert 가 처리.
+_OFFICE_EXTS = (".docx", ".doc", ".rtf", ".pdf", ".pptx", ".ppt")
 
 
 def _pick(rec: dict, preferred: str | None, candidates: list[str]) -> tuple[str, object]:
@@ -74,6 +80,54 @@ def _pick(rec: dict, preferred: str | None, candidates: list[str]) -> tuple[str,
 def _sanitize(s: str, fallback: str) -> str:
     s = _SAFE.sub("_", str(s)).strip("_")
     return (s or fallback)[:60]
+
+
+def _norm_date(s: str) -> str:
+    """문자열에서 첫 날짜를 YYYY-MM-DD 로 정규화. 없으면 빈 문자열."""
+    m = _DATE_RE.search(s or "")
+    if not m:
+        return ""
+    return f"{m.group(1)}-{m.group(2)}-{m.group(3)}"
+
+
+def _extract_date(rec: dict, preferred: str | None, content: str, src_name: str) -> str:
+    """날짜 best-effort: (1)지정/후보 메타필드 → (2)파일명 → (3)본문 앞부분. 없으면 빈값(강제 아님)."""
+    if preferred and rec.get(preferred):
+        d = _norm_date(str(rec[preferred]))
+        if d:
+            return d
+    for c in _DATE_CANDIDATES:
+        if rec.get(c):
+            d = _norm_date(str(rec[c]))
+            if d:
+                return d
+    d = _norm_date(src_name)
+    if d:
+        return d
+    return _norm_date(content[:500])
+
+
+def _split_content(content: str, max_chars: int) -> list[str]:
+    """대용량 문서를 의미 경계(문단/줄)로 분할. max_chars<=0 이면 분할 없음."""
+    if max_chars <= 0 or len(content) <= max_chars:
+        return [content]
+    parts: list[str] = []
+    buf: list[str] = []
+    size = 0
+    for para in content.split("\n\n"):
+        chunk = para + "\n\n"
+        if size + len(chunk) > max_chars and buf:
+            parts.append("".join(buf).strip())
+            buf, size = [], 0
+        # 단일 문단이 한도를 넘으면 강제로 잘라 넣는다
+        while len(chunk) > max_chars:
+            parts.append(chunk[:max_chars])
+            chunk = chunk[max_chars:]
+        buf.append(chunk)
+        size += len(chunk)
+    if buf:
+        parts.append("".join(buf).strip())
+    return [p for p in parts if p]
 
 
 def _iter_records(path: Path):
@@ -110,14 +164,24 @@ def _iter_records(path: Path):
         with path.open(encoding="utf-8", newline="") as f:
             for row in csv.DictReader(f):
                 yield dict(row)
+    elif suffix in _OFFICE_EXTS:
+        # Office/PDF → win32 COM 으로 텍스트 추출(DRM 대응, XML 직접 접근 금지).
+        try:
+            from win32_convert import convert_to_text  # noqa: E402
+            text = convert_to_text(path)
+        except Exception as e:
+            print(f"  [skip] {path.name} 변환 실패: {e}")
+            return
+        yield {"title": path.stem, "content": text, "source_file": path.name}
     else:
-        print(f"  [skip] 미지원 확장자: {path.name} (.jsonl/.json/.csv 만)")
+        print(f"  [skip] 미지원 확장자: {path.name} (.jsonl/.json/.csv/Office/PDF 만)")
 
 
 def _collect_inputs(path: Path) -> list[Path]:
     if path.is_dir():
         out = []
-        for ext in ("*.jsonl", "*.ndjson", "*.json", "*.csv"):
+        for ext in ("*.jsonl", "*.ndjson", "*.json", "*.csv",
+                    "*.docx", "*.doc", "*.rtf", "*.pdf", "*.pptx", "*.ppt"):
             out += sorted(path.glob(ext))
         return out
     return [path]
@@ -166,6 +230,9 @@ def convert(args) -> int:
             id_key, rid = _pick(rec, args.id_field, _ID_CANDIDATES)
             rid = str(rid).strip() if rid else f"{seq:06d}"
 
+            # 날짜 best-effort (강제 아님): 메타/파일명/본문 순. chrono 모드 정렬 참고용.
+            doc_date = _extract_date(rec, args.date_field, content, src.name)
+
             # 메타: 지정 필드만 또는 (미지정 시) 실제 사용한 본문/제목/ID 키 제외 나머지
             meta_lines = []
             if args.meta_field:
@@ -183,18 +250,29 @@ def convert(args) -> int:
                         sval = sval[:200] + "…"
                     meta_lines.append(f"- {k}: {sval}")
 
-            fname = f"{seq:06d}_{_sanitize(rid if id_key else title, str(seq))}{ext}"
-            # txt: 제목/메타를 평문 텍스트로 (TextLoader — unstructured/NLTK 미경유, 오프라인 견고)
-            # md : Markdown 헤더 (UnstructuredMarkdownLoader — NLTK punkt_tab 필요)
-            if ext == ".txt":
-                body = [title, "", f"source_id: {rid}"]
-                body += [ln.lstrip("- ") for ln in meta_lines]
-            else:
-                body = [f"# {title}", "", f"- source_id: {rid}"]
-                body += meta_lines
-            body += ["", content, ""]
-            (out_dir / fname).write_text("\n".join(body), encoding="utf-8")
-            written += 1
+            # 대용량 문서 분할(부분 문서로 분기) — 각 부분은 동일 source_id/날짜를 공유
+            parts = _split_content(content, args.max_doc_chars)
+            npart = len(parts)
+            base_name = _sanitize(rid if id_key else title, str(seq))
+            for pi, part in enumerate(parts, 1):
+                psuffix = f"_p{pi:02d}" if npart > 1 else ""
+                ptitle = f"{title} (part {pi}/{npart})" if npart > 1 else title
+                fname = f"{seq:06d}{psuffix}_{base_name}{ext}"
+                # txt: 제목/메타를 평문 텍스트로 (TextLoader — unstructured/NLTK 미경유, 오프라인 견고)
+                # md : Markdown 헤더 (UnstructuredMarkdownLoader — NLTK punkt_tab 필요)
+                if ext == ".txt":
+                    body = [ptitle, "", f"source_id: {rid}"]
+                    if doc_date:
+                        body.append(f"date: {doc_date}")
+                    body += [ln.lstrip("- ") for ln in meta_lines]
+                else:
+                    body = [f"# {ptitle}", "", f"- source_id: {rid}"]
+                    if doc_date:
+                        body.append(f"- date: {doc_date}")
+                    body += meta_lines
+                body += ["", part, ""]
+                (out_dir / fname).write_text("\n".join(body), encoding="utf-8")
+                written += 1
         if args.max_records and written >= args.max_records:
             break
 
@@ -219,6 +297,10 @@ def main() -> int:
                     help="메타로 보존할 필드(반복 지정). 미지정 시 나머지 전체 보존")
     ap.add_argument("--format", choices=["txt", "md"], default="txt",
                     help="출력 포맷. txt(기본, TextLoader—오프라인 권장) | md(UnstructuredMarkdownLoader—NLTK 필요)")
+    ap.add_argument("--date-field", default=None,
+                    help="날짜 필드명(jsonl/csv). 미지정 시 자동(date|timestamp 등)→파일명→본문 순")
+    ap.add_argument("--max-doc-chars", type=int, default=0,
+                    help="문서 1건이 이 길이를 넘으면 여러 부분 문서로 분할(0=비활성)")
     ap.add_argument("--clean", action="store_true", help="출력 디렉터리의 .md/.txt 를 먼저 비움")
     ap.add_argument("--max-records", type=int, default=0)
     ap.add_argument("--min-chars", type=int, default=1)

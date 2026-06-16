@@ -37,6 +37,7 @@ RUN_RESEARCH = ROOT / "tools" / "run_research.py"
 PREPARE_DATA = ROOT / "tools" / "prepare_data.py"
 CHECK_EMBEDDING = ROOT / "tools" / "check_embedding.py"
 TIKTOKEN_OFFLINE = ROOT / "tools" / "tiktoken_offline.py"
+BUILD_DIGEST = ROOT / "tools" / "build_digest.py"
 
 
 def _ensure_setup() -> None:
@@ -81,9 +82,16 @@ def cmd_prepare(argv: list[str]) -> int:
 def cmd_research(argv: list[str]) -> int:
     _ensure_setup()
     if not argv:
-        print('[launch] 사용법: research "<질의>" [--report-type ...] [--tone ...]')
+        print('[launch] 사용법: research "<질의>" [--mode rag|chrono] [--language korean] [--source local] ...')
         return 2
     return run([str(venv_python()), str(RUN_RESEARCH), *argv], check=False)
+
+
+def cmd_digest(argv: list[str]) -> int:
+    # 시간순 이벤트 다이제스트(Mode 2) 단독 생성. stdlib only → vendor 불요, 의 .env 만 필요.
+    _load_env_into_os()
+    py = str(venv_python()) if venv_exists() else sys.executable
+    return run([py, str(BUILD_DIGEST), *argv], check=False)
 
 
 def _probe(url: str) -> str:
@@ -193,14 +201,14 @@ def _doctor_runtime_tiktoken() -> None:
     run([str(venv_python()), "-c", probe], check=False)
 
 
-_CMDS = {"prepare": cmd_prepare, "research": cmd_research,
+_CMDS = {"prepare": cmd_prepare, "research": cmd_research, "digest": cmd_digest,
          "check-embedding": cmd_embed_check, "tiktoken": cmd_tiktoken,
          "doctor": cmd_doctor}
 
 
 def main() -> int:
     if len(sys.argv) < 2 or sys.argv[1] not in _CMDS:
-        print("사용법: python tools/launch.py [prepare|check-embedding|tiktoken|research|doctor] ...")
+        print("사용법: python tools/launch.py [prepare|digest|check-embedding|tiktoken|research|doctor] ...")
         return 2
     return _CMDS[sys.argv[1]](sys.argv[2:])
 

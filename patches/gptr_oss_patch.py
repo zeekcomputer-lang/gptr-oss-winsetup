@@ -227,7 +227,21 @@ def _patch_choose_agent_fallback() -> None:
     print("[gptr_oss_patch] choose_agent 기본에이전트 폴백 활성화(JSON 파싱 실패 대비)")
 
 
-def _inject_uuid_request_hook(kwargs: dict, header_names) -> None:
+def _get_rate_limiter():
+    """tools/rate_limit 의 전역 리미터 반환. 비활성/실패 시 None."""
+    try:
+        tools_dir = os.path.join(_PATCH_ROOT, "tools")
+        if tools_dir not in sys.path:
+            sys.path.insert(0, tools_dir)
+        from rate_limit import get_limiter  # type: ignore
+        lim = get_limiter()
+        return lim if getattr(lim, "enabled", False) else None
+    except Exception as e:  # pragma: no cover
+        print(f"[gptr_oss_patch][WARN] 레이트리미터 로딩 실패(무제한 진행): {e}")
+        return None
+
+
+def _inject_request_hooks(kwargs: dict, header_names) -> None:
     """ChatOpenAI 에 전달할 http_client / http_async_client 를 생성해
     매 요청마다 header_names 각각에 새 uuid4 를 붙이는 이벤트 훅을 달아준다.
 
@@ -239,7 +253,8 @@ def _inject_uuid_request_hook(kwargs: dict, header_names) -> None:
     if isinstance(header_names, str):
         header_names = [header_names]
     header_names = [h for h in header_names if h]
-    if not header_names:
+    limiter = _get_rate_limiter()
+    if not header_names and limiter is None:
         return
     try:
         import httpx
@@ -248,10 +263,14 @@ def _inject_uuid_request_hook(kwargs: dict, header_names) -> None:
         return
 
     def _sync_hook(request):
+        if limiter is not None:
+            limiter.acquire()
         for name in header_names:
             request.headers[name] = str(uuid.uuid4())
 
     async def _async_hook(request):
+        if limiter is not None:
+            await limiter.acquire_async()
         for name in header_names:
             request.headers[name] = str(uuid.uuid4())
 
@@ -324,9 +343,8 @@ def _patch_llm_default_headers() -> None:
                 if "default_headers" in kwargs and isinstance(kwargs["default_headers"], dict):
                     merged.update(kwargs["default_headers"])
                 kwargs["default_headers"] = merged
-            # 요청당 새 UUID 헤더 — httpx 이벤트 훅으로 매 호출마다 갱신(헤더별 독립 uuid)
-            if uuid_headers:
-                _inject_uuid_request_hook(kwargs, uuid_headers)
+            # 훅 주입: 레이트리미트(항상) + 요청당 UUID 헤더(설정 시). httpx 이벤트 훅.
+            _inject_request_hooks(kwargs, uuid_headers)
         return _orig(cls, provider, chat_log=chat_log, verbose=verbose, **kwargs)
 
     _wrapped._oss_patched = True
@@ -338,6 +356,11 @@ def _patch_llm_default_headers() -> None:
         print("[gptr_oss_patch] LLM 정적 헤더 없음(.env·하드코딩 모두 미설정) — 헤더 없이 호출")
     if uuid_headers:
         print(f"[gptr_oss_patch] LLM 요청당 UUID 헤더 활성화: {uuid_headers} (매 호출 헤더별 새 uuid4)")
+    _lim = _get_rate_limiter()
+    if _lim is not None:
+        print(f"[gptr_oss_patch] LLM 레이트리미트 활성화: {_lim.rps}회/sec (LLM_MAX_RPS)")
+    else:
+        print("[gptr_oss_patch] LLM 레이트리미트 비활성(LLM_MAX_RPS<=0 또는 로딩 실패)")
 
 
 def _patch_embedding_base_url() -> None:
@@ -403,6 +426,122 @@ def _patch_disable_toolcalling() -> None:
     print("[gptr_oss_patch] tool-calling 비활성화 (supports_tools→False)")
 
 
+def _patch_context_retrieval() -> None:
+    """ContextCompressor.async_get_context 래핑 — 로컬 문서 검색 동작 제어.
+
+    두 가지 모드:
+      (1) GPTR_LOCAL_FULL_CORPUS truthy → 임베딩 유사도 필터/상위N cap 을 **우회**하고
+          전체 문서를 촉크 분할해 전량 컨텍스트에 포함(Stage2: 다이제스트 재선밄 방지용).
+          GPTR_LOCAL_MAX_CHUNKS>0 이면 그 수만큼만 cap(안전망).
+      (2) 그 외 → GPTR_RAG_MAX_RESULTS>0 이면 RAG 상위N cap(기본 하드코딩 10)을 상향.
+    SIMILARITY_THRESHOLD 는 vendor 가 이미 env 로 읽으므로 여기서 건드리지 않는다.
+    """
+    try:
+        from gpt_researcher.context.compression import ContextCompressor
+    except Exception as e:  # pragma: no cover
+        print(f"[gptr_oss_patch][WARN] ContextCompressor 패치 건너뛴: {e}")
+        return
+    if getattr(ContextCompressor.async_get_context, "_oss_patched", False):
+        return
+
+    _orig = ContextCompressor.async_get_context
+
+    async def _wrapped(self, query, max_results: int = 5, cost_callback=None):
+        if _truthy(os.getenv("GPTR_LOCAL_FULL_CORPUS"), default=False):
+            try:
+                from langchain_text_splitters import RecursiveCharacterTextSplitter
+                from langchain_core.documents import Document
+                cs = int(os.getenv("GPTR_CHUNK_SIZE", "1000"))
+                co = int(os.getenv("GPTR_CHUNK_OVERLAP", "100"))
+                splitter = RecursiveCharacterTextSplitter(chunk_size=cs, chunk_overlap=co)
+                docs = [Document(page_content=str(d.get("raw_content", "") or ""), metadata=d)
+                        for d in self.documents]
+                chunks = splitter.split_documents(docs)
+                cap = int(os.getenv("GPTR_LOCAL_MAX_CHUNKS", "0") or 0)
+                if cap > 0:
+                    chunks = chunks[:cap]
+                print(f"[gptr_oss_patch] full-corpus: 전체 {len(chunks)} 촉크 컨텍스트 포함(필터/cap 우회)")
+                return self.prompt_family.pretty_print_docs(chunks, None)
+            except Exception as e:
+                print(f"[gptr_oss_patch][WARN] full-corpus 처리 실패 → 기본 경로: {e}")
+        rr = int(os.getenv("GPTR_RAG_MAX_RESULTS", "0") or 0)
+        if rr > 0:
+            max_results = rr
+        return await _orig(self, query, max_results=max_results, cost_callback=cost_callback)
+
+    _wrapped._oss_patched = True
+    ContextCompressor.async_get_context = _wrapped
+    print("[gptr_oss_patch] 컨텍스트 검색 패치(full-corpus/RAG max_results)")
+
+
+def _patch_full_corpus_plan() -> None:
+    """GPTR_LOCAL_FULL_CORPUS 일 때 plan_research → [] (하위질의 fan-out 제거, 1패스).
+    → 전체 문서를 정확히 1회만 컨텍스트에 싣어 중복 방지(다이제스트가 이미 전문서 대표)."""
+    try:
+        from gpt_researcher.skills.researcher import ResearchConductor
+    except Exception as e:  # pragma: no cover
+        print(f"[gptr_oss_patch][WARN] ResearchConductor 패치 건너뛴: {e}")
+        return
+    if getattr(ResearchConductor.plan_research, "_oss_patched", False):
+        return
+    _orig = ResearchConductor.plan_research
+
+    async def _wrapped(self, query, query_domains=None):
+        if _truthy(os.getenv("GPTR_LOCAL_FULL_CORPUS"), default=False):
+            print("[gptr_oss_patch] full-corpus: 하위질의 생성 생략(1패스)")
+            return []
+        return await _orig(self, query, query_domains)
+
+    _wrapped._oss_patched = True
+    ResearchConductor.plan_research = _wrapped
+    print("[gptr_oss_patch] full-corpus plan_research 패치(1패스)")
+
+
+_KOREAN_DIRECTIVE = (
+    "\n\n[언어 강제] 최종 산출물의 모든 문장(제목·서론·본론·결론 포함)은 반드시 한국어로 작성한다. "
+    "영어 문장을 섮지 않는다. 고유명·약어는 원문 병기 가능."
+)
+
+
+def _patch_force_language() -> None:
+    """보고서 생성 프롬프트에 강한 한국어 지시문을 덧붙여 gpt-oss 언어 이탈 방지(하드닝).
+
+    LANGUAGE=korean 이 1차(공식) 경로. 이 패치는 약체 모델 대비 2차 보강.
+    GPTR_FORCE_KOREAN 명시 설정 우선, 미설정 시 LANGUAGE 가 한국어면 기본 ON.
+    PromptFamily 의 generate_report_* 는 staticmethod → 래핑 후 staticmethod 로 재할당.
+    """
+    lang = os.getenv("LANGUAGE", "").strip().lower()
+    want = _truthy(os.getenv("GPTR_FORCE_KOREAN"),
+                   default=lang.startswith("korea") or lang in ("ko", "kr", "한국어"))
+    if not want:
+        return
+    try:
+        from gpt_researcher.prompts import PromptFamily
+    except Exception as e:  # pragma: no cover
+        print(f"[gptr_oss_patch][WARN] PromptFamily 패치 건너뛴: {e}")
+        return
+    targets = ["generate_report_prompt", "generate_report_introduction", "generate_report_conclusion"]
+    patched = []
+    for name in targets:
+        fn = getattr(PromptFamily, name, None)
+        if fn is None or getattr(fn, "_oss_patched", False):
+            continue
+
+        def _make(orig):
+            def _w(*args, **kwargs):
+                return f"{orig(*args, **kwargs)}{_KOREAN_DIRECTIVE}"
+            _w._oss_patched = True
+            return _w
+
+        try:
+            setattr(PromptFamily, name, staticmethod(_make(fn)))
+            patched.append(name)
+        except Exception as e:  # pragma: no cover
+            print(f"[gptr_oss_patch][WARN] {name} 한국어 하드닝 실패: {e}")
+    if patched:
+        print(f"[gptr_oss_patch] 한국어 출력 하드닝 적용: {patched}")
+
+
 def apply() -> None:
     global _APPLIED
     if _APPLIED:
@@ -420,6 +559,11 @@ def apply() -> None:
     _patch_embedding_base_url()
     _patch_disable_toolcalling()
     _patch_choose_agent_fallback()
+    for _fn in (_patch_context_retrieval, _patch_full_corpus_plan, _patch_force_language):
+        try:
+            _fn()
+        except Exception as _e:  # pragma: no cover
+            print(f"[gptr_oss_patch][WARN] {_fn.__name__} 실패(핵심 계속): {_e}")
     _APPLIED = True
     print("[gptr_oss_patch] 적용 완료.")
 

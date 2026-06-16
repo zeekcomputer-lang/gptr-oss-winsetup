@@ -1,0 +1,6 @@
+# Windows 전용 추가 의존성 (POSIX/WSL 에서는 불필요)
+#   Office/PDF → 텍스트 변환을 win32 COM(설치된 Word/PowerPoint)으로 수행하기 위함.
+#   python-docx/python-pptx 같은 XML 직접 파서는 사용하지 않는다(DRM 문서 대응).
+#   설치:  pip install -r requirements-windows.txt
+#   요구사항: Windows + Microsoft Office(Word/PowerPoint) 설치. PDF 는 Word 2013+ 가 처리.
+pywin32>=306
