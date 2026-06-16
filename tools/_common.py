@@ -24,6 +24,12 @@ DATA_DIR = ROOT / "data"
 DATA_RAW_DIR = DATA_DIR / "raw"
 DOCS_DIR = DATA_DIR / "docs"
 
+# 오프라인 리소스 번들 (setup 시 1회 채움 → 런타임 네트워크 미접속)
+#   tiktoken BPE 블롭 / NLTK 토크나이저 데이터. .gitignore 대상.
+OFFLINE_DIR = ROOT / "offline"
+TIKTOKEN_CACHE_DIR = OFFLINE_DIR / "tiktoken_cache"
+NLTK_DATA_DIR = OFFLINE_DIR / "nltk_data"
+
 GPTR_REPO_URL = "https://github.com/assafelovic/gpt-researcher.git"
 GPTR_PIN = os.getenv("GPTR_PIN", "")  # 비우면 기본 브랜치 최신
 

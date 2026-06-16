@@ -6,7 +6,8 @@
 
 - **목적**: 외부 [gpt-researcher](https://github.com/assafelovic/gpt-researcher) 를 **GPT-OSS**(로컬/사내 OpenAI 호환 LLM)로 구동하는 Windows 올인원 셋업.
 - **원본 무수정**: gpt-researcher 는 `vendor/` 에 clone 하고, 런타임 monkeypatch(`patches/gptr_oss_patch.py`)로만 연동.
-- **현재 주력 시나리오**: 사용자의 **로컬 데이터(jsonl)** → `.md` 변환 → `--source local` 로 오프라인 문서 생성. (웹 리서치도 됨)
+- **현재 주력 시나리오**: 사용자의 **로컬 데이터(jsonl)** → `.txt` 변환 → `--source local` 로 **완전 오프라인** 문서 생성. (웹 리서치도 됨)
+- **완전 오프라인(§8)**: 외부 리소스(tiktoken BPE·NLTK)를 setup 이 `offline/` 에 미리 받아두고, 패치가 `TIKTOKEN_CACHE_DIR`/`NLTK_DATA` 를 자동 연결 → 런타임 네트워크 0(LLM·임베딩 API 호출만).
 - **역할 분리(중요)**: LLM = 외부 API(프록시·인증 헤더 가능) / 임베딩 = **사용자가 별도 운영하는 BGE 엔드포인트에 접속만**(이 repo 는 임베딩 서버를 구동하지 않음).
 - **상태**: 환경 비의존 로직은 전부 실측 검증 완료. **실제 gpt-oss 엔드포인트 + BGE E2E 전체 실행은 사용자 환경에서 미수행**.
 - **최신 커밋**: `8864908` (Python 3.14 numpy 셋업 픽스).
@@ -65,6 +66,8 @@ Windows: `setup.bat / check-embedding.bat / prepare-data.bat / research-local.ba
 - UUID 헤더: 정적 2변수 독립 / 요청당 N개 갱신(async 포함) / from_provider 래핑 경로 확인.
 - py3.14: 실제 3.14.3 에서 numpy `<2.3.0` 휠 부재 → `>=2.3.0` cp314 휠 설치 성공 확인.
 - 전체 `py_compile` 통과. 가비지 문자 0.
+- **오프라인 리소스(실측)**: setup 의 tiktoken 캐시(o200k_base/cl100k_base) + NLTK(punkt/punkt_tab 등) 다운로드 동작 확인. **불량 프록시(=네트워크 차단) 상태에서 tiktoken encode·NLTK sent_tokenize 정상** = 런타임 네트워크 불요 입증.
+- prepare_data `--format txt` (기본): 더미 코퍼스 .txt 생성 확인(TextLoader 경로 → unstructured/NLTK 미경유).
 - **미수행**: 실제 gpt-oss + 실제 BGE 로 research 한 건 완주(E2E). 사용자 환경에서 진행 예정.
 
 ## §6. 다음 작업 체크리스트
@@ -81,3 +84,19 @@ Windows: `setup.bat / check-embedding.bat / prepare-data.bat / research-local.ba
 - 사내 PyPI 미러에 cp314 휠 없는 패키지가 있으면 그 패키지만 소스빌드 필요(MANUAL 부록 D 대안).
 - 임베딩 서버 동시성: 사용자 서버가 `async def`+동기 encode 면 이벤트 루프 블로킹 가능(정확성 무영향, MANUAL 부록 C.2).
 - `RETRIEVER=tavily` 는 키 필요(web/hybrid 한정). local 모드는 검색 키 불요.
+- 오프라인 프로비저닝은 setup(온라인) 시점에 1회 수행. 에어갭 머신이 setup 머신과 다르면 `offline/` 폴더를 함께 복사해 옮긴다.
+
+## §8. 완전 오프라인 전략 (런타임 네트워크 0 — LLM·임베딩 API 만 예외)
+
+증상별 원인과 해결:
+
+| 증상 | 원인 | 해결 |
+|------|------|------|
+| tiktoken/nltk_data 다운로드 실패 | gpt-researcher 가 런타임에 외부 리소스 자동 다운로드 | setup `provision_offline()` 가 `offline/tiktoken_cache`·`offline/nltk_data` 에 사전 적재 → 패치가 `TIKTOKEN_CACHE_DIR`/`NLTK_DATA` 자동 연결 |
+| `Resource punkt_tab not found` | `UnstructuredMarkdownLoader`(.md) 가 NLTK 문장분할 사용 | (1) `prepare --format txt`(기본)로 **TextLoader 경로** → unstructured/NLTK 미경유 (2) 그래도 .md/.docx 쓰면 NLTK 번들 사용 |
+| `json_repair … 'NoneType' object is not subscriptable` | gpt-oss 가 JSON 지시 미준수 → 빈/None 응답 | 패치 `_patch_choose_agent_fallback` 가 choose_agent 를 감싸 **기본 에이전트로 폴백**(turn 미취소) |
+| 문서 로드 실패/작업 취소 | 위 예외들이 async gather 에서 전파 → 취소 연쇄 | 위 3개 해소 시 사라짐. local 은 `--format txt` 가 가장 안전 |
+
+핵심 환경변수(.env): `GPTR_OFFLINE=1`(HF/transformers 네트워크 차단), `GPTR_AGENT_JSON_FALLBACK=1`(기본 ON). tiktoken/NLTK 경로는 패치가 `offline/` 로 자동 설정(직접 지정 불요).
+
+구현 위치: `tools/setup.py:provision_offline()`(4/6 단계) · `patches/gptr_oss_patch.py:_ensure_offline_resources()/_patch_choose_agent_fallback()` · `tools/prepare_data.py --format` · `tools/_common.py` OFFLINE 경로. `python tools/launch.py doctor` 가 `offline res` 상태(tiktoken_cache/nltk_data OK 여부) 표시.

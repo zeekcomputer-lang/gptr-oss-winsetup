@@ -25,7 +25,7 @@ gptr-oss-winsetup/
 │  ├─ _common.py               # 공유 유틸 (경로/venv/플랫폼/데이터 경로)
 │  ├─ setup.py                 # 1회성 셋업 (venv + vendoring + 의존성 + .env + data/)
 │  ├─ launch.py                # 반복 실행 (prepare / check-embedding / research / doctor)
-│  ├─ prepare_data.py          # jsonl/csv/json → data/docs/*.md 변환기 (로컬 데이터)
+│  ├─ prepare_data.py          # jsonl/csv/json → data/docs/*.txt(기본)·.md 변환기 (로컬 데이터)
 │  ├─ check_embedding.py       # 별도 운영 BGE 엔드포인트 연결/호환성 점검 (stdlib)
 │  └─ run_research.py          # 리서치 엔트리포인트 (--source web|local|hybrid)
 ├─ examples/sample-corpus.jsonl # 로컬 데이터 형식 예제(3건)
@@ -65,7 +65,7 @@ POSIX(WSL/Linux/macOS)에서는 동일하게 `python tools/setup.py`, `python to
 웹 대신 **내 로컬 데이터**로 보고서를 만들려면 (웹 미접속, BGE 임베딩 유사도만 사용):
 
 ```bat
-REM 1) jsonl/csv/json → data\docs\*.md 변환 (원본 gpt-researcher는 jsonl 미지원이라 변환 필요)
+REM 1) jsonl/csv/json → data\docs\*.txt 변환 (원본 gpt-researcher는 jsonl 미지원이라 변환 필요; txt=오프라인 권장)
 windows\prepare-data.bat "data\raw\corpus.jsonl" --content-field text --clean
 
 REM 2) 임베딩: 사용자가 BGE 서버(:8999)를 별도 기동 → .env 의 EMBEDDING_BASE_URL 지정

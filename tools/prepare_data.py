@@ -134,9 +134,11 @@ def convert(args) -> int:
         return 1
 
     out_dir = Path(args.out) if args.out else DOCS_DIR
+    ext = ".txt" if args.format == "txt" else ".md"
     if args.clean and out_dir.exists():
-        for p in out_dir.glob("*.md"):
-            p.unlink()
+        for pat in ("*.md", "*.txt"):
+            for p in out_dir.glob(pat):
+                p.unlink()
     out_dir.mkdir(parents=True, exist_ok=True)
 
     inputs = _collect_inputs(in_path)
@@ -181,9 +183,15 @@ def convert(args) -> int:
                         sval = sval[:200] + "…"
                     meta_lines.append(f"- {k}: {sval}")
 
-            fname = f"{seq:06d}_{_sanitize(rid if id_key else title, str(seq))}.md"
-            body = [f"# {title}", "", f"- source_id: {rid}"]
-            body += meta_lines
+            fname = f"{seq:06d}_{_sanitize(rid if id_key else title, str(seq))}{ext}"
+            # txt: 제목/메타를 평문 텍스트로 (TextLoader — unstructured/NLTK 미경유, 오프라인 견고)
+            # md : Markdown 헤더 (UnstructuredMarkdownLoader — NLTK punkt_tab 필요)
+            if ext == ".txt":
+                body = [title, "", f"source_id: {rid}"]
+                body += [ln.lstrip("- ") for ln in meta_lines]
+            else:
+                body = [f"# {title}", "", f"- source_id: {rid}"]
+                body += meta_lines
             body += ["", content, ""]
             (out_dir / fname).write_text("\n".join(body), encoding="utf-8")
             written += 1
@@ -191,7 +199,7 @@ def convert(args) -> int:
             break
 
     section("변환 완료")
-    print(f"  생성  : {written} 파일 → {out_dir}")
+    print(f"  생성  : {written} 파일({ext}) → {out_dir}")
     print(f"  건너뜀: {skipped} (본문 < {args.min_chars}자)")
     print(f"  DOC_PATH 로 사용할 경로: {out_dir}")
     if written == 0:
@@ -209,7 +217,9 @@ def main() -> int:
     ap.add_argument("--id-field", default=None)
     ap.add_argument("--meta-field", action="append", default=None,
                     help="메타로 보존할 필드(반복 지정). 미지정 시 나머지 전체 보존")
-    ap.add_argument("--clean", action="store_true", help="출력 디렉터리의 .md 를 먼저 비움")
+    ap.add_argument("--format", choices=["txt", "md"], default="txt",
+                    help="출력 포맷. txt(기본, TextLoader—오프라인 권장) | md(UnstructuredMarkdownLoader—NLTK 필요)")
+    ap.add_argument("--clean", action="store_true", help="출력 디렉터리의 .md/.txt 를 먼저 비움")
     ap.add_argument("--max-records", type=int, default=0)
     ap.add_argument("--min-chars", type=int, default=1)
     return convert(ap.parse_args())

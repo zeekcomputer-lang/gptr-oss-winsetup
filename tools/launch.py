@@ -129,8 +129,15 @@ def cmd_doctor(argv: list[str]) -> int:
     print(f"  venv         : {'OK' if venv_exists() else 'MISSING'}")
     print(f"  vendor gptr  : {'OK' if vendor_exists() else 'MISSING'}")
     print(f"  .env         : {'OK' if (ROOT / '.env').exists() else 'MISSING'}")
-    md_count = len(list(DOCS_DIR.glob("*.md"))) if DOCS_DIR.exists() else 0
-    print(f"  local docs   : {md_count} .md @ {DOCS_DIR}")
+    doc_count = (len(list(DOCS_DIR.glob("*.md"))) + len(list(DOCS_DIR.glob("*.txt")))) if DOCS_DIR.exists() else 0
+    print(f"  local docs   : {doc_count} (.md/.txt) @ {DOCS_DIR}")
+    # 오프라인 리소스 번들 존재 여부
+    from _common import TIKTOKEN_CACHE_DIR, NLTK_DATA_DIR  # noqa: E402
+    tk_ok = TIKTOKEN_CACHE_DIR.exists() and any(TIKTOKEN_CACHE_DIR.iterdir())
+    nltk_ok = NLTK_DATA_DIR.exists() and any(NLTK_DATA_DIR.iterdir())
+    print(f"  offline res  : tiktoken_cache={'OK' if tk_ok else 'MISSING'}, "
+          f"nltk_data={'OK' if nltk_ok else 'MISSING'}  (둘 다 OK 여야 오프라인 구동)")
+    print(f"  GPTR_OFFLINE       = {os.getenv('GPTR_OFFLINE', '(unset)')}")
     print(f"  REPORT_SOURCE      = {os.getenv('REPORT_SOURCE', '(unset/web)')}")
     print(f"  DOC_PATH           = {os.getenv('DOC_PATH', '(unset)')}")
     base = os.getenv("OPENAI_BASE_URL", "")

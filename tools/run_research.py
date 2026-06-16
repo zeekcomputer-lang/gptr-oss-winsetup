@@ -105,12 +105,12 @@ def main() -> int:
         doc_path = args.doc_path or os.getenv("DOC_PATH") or str(DEFAULT_DOC_PATH)
         doc_dir = Path(doc_path)
         os.environ["DOC_PATH"] = str(doc_dir)
-        md_count = len(list(doc_dir.glob("*.md"))) if doc_dir.exists() else 0
-        if not doc_dir.exists() or md_count == 0:
+        doc_count = (len(list(doc_dir.glob("*.md"))) + len(list(doc_dir.glob("*.txt")))) if doc_dir.exists() else 0
+        if not doc_dir.exists() or doc_count == 0:
             print(f"[run_research][WARN] DOC_PATH 에 문서가 없습니다: {doc_dir} "
                   f"— 먼저 'python tools/prepare_data.py <jsonl>' 로 변환하세요.")
         else:
-            print(f"[run_research] source={report_source} DOC_PATH={doc_dir} (md {md_count}건)")
+            print(f"[run_research] source={report_source} DOC_PATH={doc_dir} (문서 {doc_count}건)")
         if not os.getenv("EMBEDDING_BASE_URL"):
             print("[run_research][WARN] EMBEDDING_BASE_URL 미설정 — local 모드는 BGE 임베딩 서버가 필요합니다.")
 

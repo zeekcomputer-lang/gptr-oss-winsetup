@@ -22,3 +22,6 @@ __pycache__/
 # models cache
 .cache/
 models/
+
+# 오프라인 리소스 번들(setup 이 다운로드) — tiktoken 블록 / NLTK 데이터. 재현 가능하므로 추적 제외.
+offline/

@@ -27,6 +27,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _common import (  # noqa: E402
     ROOT, VENDOR_DIR, VENV_DIR, OUTPUTS_DIR, DATA_RAW_DIR, DOCS_DIR,
+    OFFLINE_DIR, TIKTOKEN_CACHE_DIR, NLTK_DATA_DIR,
     GPTR_REPO_URL, GPTR_PIN,
     venv_python, venv_exists, vendor_exists, run, py_exe, section, is_windows,
 )
@@ -35,7 +36,7 @@ BUILD_REQUIREMENTS = ROOT / ".gptr-build-requirements.txt"
 
 
 def make_venv() -> None:
-    section("1/5 venv 생성")
+    section("1/6 venv 생성")
     if venv_exists():
         print("  이미 존재 — 건너뜀")
         return
@@ -43,7 +44,7 @@ def make_venv() -> None:
 
 
 def vendor_repo() -> None:
-    section("2/5 gpt-researcher vendoring")
+    section("2/6 gpt-researcher vendoring")
     if vendor_exists():
         print(f"  이미 존재 — 건너뜀 ({VENDOR_DIR})")
         return
@@ -93,7 +94,7 @@ def _materialize_requirements(src: Path, pyver: tuple[int, int]) -> Path:
 
 
 def pip_install() -> None:
-    section("3/5 의존성 설치")
+    section("3/6 의존성 설치")
     vpy = str(venv_python())
     run([vpy, "-m", "pip", "install", "--upgrade", "pip", "setuptools", "wheel"])
 
@@ -112,12 +113,68 @@ def pip_install() -> None:
 
     # 검색 retriever (web/hybrid 모드용, 무키). local 전용이면 사실상 불필이나 고정메뉴상 설치.
     run([vpy, "-m", "pip", "install", "--prefer-binary", "duckduckgo-search"])
+    # NLTK: unstructured 계열 로더(.md/.docx 등)가 문장분할에 사용. 명시 설치(오프라인 프로비저닝 대상).
+    run([vpy, "-m", "pip", "install", "--prefer-binary", "nltk"], check=False)
     # 임베딩 서버는 별도 운영 - torch/sentence-transformers 미설치.
     # cp314 휠이 없는 패키지가 있으면 --prefer-binary 가 휠 있는 버전을 선택한다.
 
 
+# 오프라인 런타임에 필요한 외부 리소스 — setup(온라인) 시점에 미리 받아 offline/ 에 고정한다.
+#   tiktoken: 비용산정 토크나이저 BPE 블록(매 LLM 호출에서 사용 → 필수)
+#   nltk    : unstructured 계열 로더(.md/.docx/.pptx 등)의 문장분할(punkt_tab 등)
+_NLTK_PACKAGES = [
+    "punkt", "punkt_tab",
+    "averaged_perceptron_tagger", "averaged_perceptron_tagger_eng",
+    "stopwords",
+]
+
+
+def provision_offline() -> None:
+    """오프라인 구동용 외부 리소스를 venv 안에서 미리 내려받아 offline/ 에 고정.
+
+    - setup 은 pip(PyPI) 때문에 어차피 온라인이다. 이 시점에 tiktoken/nltk 리소스를
+      받아두면 이후 research 는 네트워크 없이(LLM·임베딩 API 호출만) 완결한다.
+    - 실패해도 치명적이지 않게 best-effort(check=False). 단, 미완료 시 명확히 안내.
+    """
+    section("4/6 오프라인 리소스 프로비저닝 (tiktoken·NLTK)")
+    vpy = str(venv_python())
+    OFFLINE_DIR.mkdir(parents=True, exist_ok=True)
+    TIKTOKEN_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    NLTK_DATA_DIR.mkdir(parents=True, exist_ok=True)
+
+    # 1) tiktoken BPE 블록 사전 캐시 — TIKTOKEN_CACHE_DIR 지정 후 encode 1회로 다운로드 유발
+    tk_code = (
+        "import os, tiktoken;"
+        "os.environ['TIKTOKEN_CACHE_DIR']=r'%s';"
+        "[tiktoken.get_encoding(n).encode('warmup') for n in ('o200k_base','cl100k_base')];"
+        "tiktoken.encoding_for_model('text-embedding-3-small').encode('x');"
+        "print('tiktoken cache OK ->', os.environ['TIKTOKEN_CACHE_DIR'])"
+        % str(TIKTOKEN_CACHE_DIR)
+    )
+    rc_tk = run([vpy, "-c", tk_code], check=False)
+
+    # 2) NLTK 데이터 사전 다운로드 → offline/nltk_data
+    nltk_pkgs = ",".join(repr(p) for p in _NLTK_PACKAGES)
+    nltk_code = (
+        "import nltk;"
+        "d=r'%s';"
+        "ok=all([nltk.download(p, download_dir=d, quiet=True) for p in [%s]]);"
+        "print('nltk data OK ->', d) if ok else print('nltk data PARTIAL ->', d)"
+        % (str(NLTK_DATA_DIR), nltk_pkgs)
+    )
+    rc_nltk = run([vpy, "-c", nltk_code], check=False)
+
+    if rc_tk != 0 or rc_nltk != 0:
+        print("  [WARN] 오프라인 리소스 일부 미완료 — 오프라인 research 전 인터넷 가능 환경에서")
+        print("         'python tools/setup.py' 를 1회 재실행하거나, 아래를 수동 수행하세요:")
+        print(f"         tiktoken: TIKTOKEN_CACHE_DIR={TIKTOKEN_CACHE_DIR} 로 get_encoding 1회")
+        print(f"         nltk    : nltk.download({_NLTK_PACKAGES}, download_dir={NLTK_DATA_DIR})")
+    else:
+        print("  완료: tiktoken_cache + nltk_data 고정됨 (런타임 네트워크 불요)")
+
+
 def bootstrap_env() -> None:
-    section("4/5 .env 부트스트랩")
+    section("5/6 .env 부트스트랩")
     env = ROOT / ".env"
     example = ROOT / ".env.example"
     if env.exists():
@@ -128,7 +185,7 @@ def bootstrap_env() -> None:
 
 
 def verify() -> None:
-    section("5/5 검증")
+    section("6/6 검증")
     vpy = str(venv_python())
     # gpt_researcher import (vendor 경로 주입)
     code = (
@@ -155,6 +212,7 @@ def main() -> int:
     make_venv()
     vendor_repo()
     pip_install()
+    provision_offline()
     bootstrap_env()
     verify()
 
