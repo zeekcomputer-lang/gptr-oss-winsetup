@@ -515,13 +515,39 @@ def _split_by_budget(text: str, budget: int) -> list[str]:
 # ─────────────────────────────────────────────────────────────
 #  파이프라인
 # ─────────────────────────────────────────────────────────────
+def idmap_from_docs(docs: list[dict]) -> dict:
+    """문서 리스트 → {id: title} 매핑(출처 표기용). title 이 비면 id 로 폴백."""
+    m: dict[str, str] = {}
+    for d in docs:
+        i = str(d.get("id") or "").strip()
+        if not i:
+            continue
+        t = str(d.get("title") or "").strip() or i
+        m.setdefault(i, t)
+    return m
+
+
+def write_idmap(docs: list[dict], out_path: Path) -> None:
+    """id→title 사이드카(JSON) 기록. 출처를 title 로 해석하기 위함(비치명)."""
+    try:
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_text(
+            json.dumps(idmap_from_docs(docs), ensure_ascii=False, indent=2),
+            encoding="utf-8")
+    except Exception as e:  # pragma: no cover
+        print(f"[digest][WARN] idmap 사이드카 기록 실패(비치명): {e}")
+
+
 def build_digest(doc_dir: Path, query: str, max_input_kb: int = 25,
-                 verbose: bool = True) -> tuple[str, dict]:
+                 verbose: bool = True, idmap_out: Path | None = None) -> tuple[str, dict]:
     """전 문서를 map-reduce 로 압축한 시간순 다이제스트(text)와 통계(dict) 반환."""
     docs = order_docs(load_docs(doc_dir))
     if not docs:
         raise RuntimeError(f"문서 없음: {doc_dir} — 먼저 prepare 로 변환하세요.")
     all_ids = {d["id"] for d in docs}
+    # 출처 표기(title)용 사이드카 — 후처리 새니타이저가 [[id]] → title 해석에 사용.
+    if idmap_out is not None:
+        write_idmap(docs, idmap_out)
     # 용어사전 블록(최대 8KB)은 map/reduce system 프롬프트에 매번 들어간다.
     # 그 크기를 입력 예산에서 빼지 않으면 system+user 총합이 한도를 넘어 504 발생(용어사전 추가 후 회귀).
     gloss_bytes = _nbytes(_glossary_block())
@@ -625,7 +651,9 @@ def main() -> int:
 
     doc_dir = Path(args.doc_path)
     try:
-        digest, stats = build_digest(doc_dir, args.query, args.max_input_kb)
+        digest, stats = build_digest(
+            doc_dir, args.query, args.max_input_kb,
+            idmap_out=Path(args.out).parent / "idmap.json")
     except RuntimeError as e:
         print(f"[digest][ERROR] {e}", file=sys.stderr)
         return 1

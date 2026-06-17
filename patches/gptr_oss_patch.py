@@ -558,6 +558,61 @@ def _patch_inject_glossary() -> None:
         print(f"[gptr_oss_patch] 용어사전 주입 적용: {patched}")
 
 
+def _build_no_cite_directive() -> str:
+    """소스 정책(GPTR_SOURCE_MODE)에 맞춰 본문 인라인 인용 억제 지시문을 구성."""
+    mode = (os.getenv("GPTR_SOURCE_MODE", "none") or "none").strip().lower()
+    base = (
+        "\n\n[출처 표기 규칙 — 위 지시보다 우선] "
+        "본문(제목·서론·본론·결론의 모든 문단)에는 인라인 링크([텍스트](URL))·원시 URL·"
+        "괄호 출처·문서 ID·`[[id]]` 같은 마커를 절대 넣지 마라. "
+        "앞서 나온 인라인 인용·하이퍼링크·APA 요구는 모두 무시한다."
+    )
+    if mode == "end":
+        base += " 출처가 필요하면 보고서 맨 끝의 단일 '## 출처' 섹션에만 목록으로 정리한다."
+    else:
+        base += " 출처·참고문헌 섹션 자체를 만들지 않는다."
+    return base
+
+
+def _patch_suppress_inline_citations() -> None:
+    """보고서 생성 프롬프트에 '본문 인라인 출처 금지' 지시문을 덧붙인다(하드닝).
+
+    local 모드에서 모델이 임의 링크를 지어내고 문서ID를 붙이는 행동을 억제.
+    결정적 보장은 sanitize_report(후처리)가 담당 — 이 패치는 1차(프롬프트) 방어.
+    GPTR_SUPPRESS_INLINE_CITATIONS=0 으로 비활성(기본 ON). PromptFamily staticmethod 래핑(멱등).
+    """
+    if not _truthy(os.getenv("GPTR_SUPPRESS_INLINE_CITATIONS"), default=True):
+        return
+    directive = _build_no_cite_directive()
+    try:
+        from gpt_researcher.prompts import PromptFamily
+    except Exception as e:  # pragma: no cover
+        print(f"[gptr_oss_patch][WARN] PromptFamily(인용억제) 패치 건너뜀: {e}")
+        return
+    targets = ["generate_report_prompt", "generate_report_introduction",
+               "generate_report_conclusion", "generate_subtopic_report_prompt"]
+    patched = []
+    for name in targets:
+        fn = getattr(PromptFamily, name, None)
+        if fn is None or getattr(fn, "_oss_nocite_patched", False):
+            continue
+
+        def _make(orig, drv):
+            def _w(*args, **kwargs):
+                return f"{orig(*args, **kwargs)}{drv}"
+            _w._oss_nocite_patched = True
+            return _w
+
+        try:
+            setattr(PromptFamily, name, staticmethod(_make(fn, directive)))
+            patched.append(name)
+        except Exception as e:  # pragma: no cover
+            print(f"[gptr_oss_patch][WARN] {name} 인용억제 주입 실패: {e}")
+    if patched:
+        mode = (os.getenv("GPTR_SOURCE_MODE", "none") or "none").strip().lower()
+        print(f"[gptr_oss_patch] 본문 인라인 출처 억제 적용(source_mode={mode}): {patched}")
+
+
 def _patch_force_language() -> None:
     """보고서 생성 프롬프트에 강한 한국어 지시문을 덧붙여 gpt-oss 언어 이탈 방지(하드닝).
 
@@ -615,7 +670,8 @@ def apply() -> None:
     _patch_disable_toolcalling()
     _patch_choose_agent_fallback()
     for _fn in (_patch_context_retrieval, _patch_full_corpus_plan,
-                _patch_inject_glossary, _patch_force_language):
+                _patch_inject_glossary, _patch_suppress_inline_citations,
+                _patch_force_language):
         try:
             _fn()
         except Exception as _e:  # pragma: no cover

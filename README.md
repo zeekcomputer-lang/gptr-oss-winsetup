@@ -104,6 +104,7 @@ windows\research-chrono.bat "프로젝트 진행 경과 정리"
 - **chrono** 는 컨텍스트 윈도우 초과를 피하려고 25KB(`CHRONO_MAX_INPUT_KB`) 단위로 나눠 요약하며, 모든 문서가 최소 1회 요약에 포함됨을 **코드로 검증**(누락 0).
 - **레이트리밋**: 모든 LLM 호출은 `LLM_MAX_RPS`(기본 4회/sec) 이하로 자동 스페이싱(GPT-OSS 5회/sec cap 대응).
 - Office/PDF 변환은 **win32 COM**(설치된 Word/PowerPoint)만 사용 → DRM 문서도 처리. `pip install -r requirements-windows.txt`(pywin32) 필요.
+- **본문 인라인 출처 억제**(기본 적용): local 모드에서 모델이 본문에 임의 링크·문서ID를 박는 문제를 프롬프트 하드닝 + 결정적 후처리(`tools/sanitize_report.py`)로 제거. 정책 `GPTR_SOURCE_MODE`: `none`(기본, 출처 일절 없음) · `end`(맨 끝 `## 출처` 에 문서 title 목록만). 코드블록·표는 보호.
 
 ## 환경설정 (.env)
 

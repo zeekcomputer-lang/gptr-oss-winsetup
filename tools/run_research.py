@@ -97,7 +97,9 @@ def _build_chrono_digest(query: str, doc_dir: Path, max_input_kb: int) -> int:
     out = digest_dir / "digest.md"
     print(f"[run_research] chrono 모드: 전문서 다이제스트 생성 (입력한도 {max_input_kb}KB)")
     try:
-        digest, stats = bd.build_digest(doc_dir, query, max_input_kb=max_input_kb)
+        digest, stats = bd.build_digest(
+            doc_dir, query, max_input_kb=max_input_kb,
+            idmap_out=digest_dir / "idmap.json")
     except Exception as e:
         print(f"[run_research][ERROR] 다이제스트 생성 실패: {type(e).__name__}: {e}", file=sys.stderr)
         return 1
@@ -210,7 +212,9 @@ def main() -> int:
         print(f"[run_research][ERROR] 리서치 실패: {type(e).__name__}: {e}", file=sys.stderr)
         return 1
 
-    # chrono 후처리: 사용된 고유명 → 말미 용어집(표) 부록 추가(사전+문서유래)
+    # 후처리 1: 본문 인라인 출처(링크/URL/문서ID) 제거 + 출처 정책(GPTR_SOURCE_MODE)
+    report = _sanitize_report_hook(report, args.mode)
+    # 후처리 2: chrono 사용된 고유명 → 말미 용어집(표) 부록 추가(사전+문서유래)
     report = _maybe_append_glossary(report, args.mode)
 
     out_path.write_text(report, encoding="utf-8")
@@ -229,6 +233,35 @@ def _truthy(v, default: bool = False) -> bool:
     if v is None:
         return default
     return str(v).strip().lower() in ("1", "true", "yes", "on")
+
+
+def _sanitize_report_hook(report: str, mode: str) -> str:
+    """본문 인라인 출처(링크/URL/문서ID/[[id]] 마커)를 제거한다(결정적 후처리).
+
+    정책 GPTR_SOURCE_MODE: none(기본, 출처 전부 생략) | end(말미 '## 출처' title 목록).
+    GPTR_SUPPRESS_INLINE_CITATIONS=0 이면 전체 비활성(기본 ON). 비치명: 실패 시 원본 반환.
+    """
+    if not _truthy(os.getenv("GPTR_SUPPRESS_INLINE_CITATIONS"), default=True):
+        return report
+    tools_dir = ROOT / "tools"
+    if str(tools_dir) not in sys.path:
+        sys.path.insert(0, str(tools_dir))
+    try:
+        import sanitize_report as sr  # noqa: E402
+    except Exception as e:
+        print(f"[run_research][WARN] sanitize_report 로드 실패(건너뜀): {e}")
+        return report
+    source_mode = (os.getenv("GPTR_SOURCE_MODE", "none") or "none").strip().lower()
+    idmap = {}
+    if source_mode == "end":
+        idmap = sr.load_idmap(ROOT / "data" / "digest" / "idmap.json")
+    try:
+        cleaned = sr.sanitize_report(report, source_mode, idmap)
+        print(f"[run_research] 본문 출처 정리 완료(mode={source_mode}, 길이 {len(report)}→{len(cleaned)})")
+        return cleaned
+    except Exception as e:
+        print(f"[run_research][WARN] 출처 정리 실패(원본 유지): {e}")
+        return report
 
 
 def _maybe_append_glossary(report: str, mode: str) -> str:
